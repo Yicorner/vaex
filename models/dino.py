@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.spectral_norm import SpectralNorm
 from torchvision.transforms import RandomCrop
-
+import torch.nn.init as init
 import dist
 
 try:
@@ -117,6 +117,7 @@ class ResidualBlock(nn.Module):
 class SpectralConv1d(nn.Conv1d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        init.normal_(self.weight, mean=0.0, std=0.02)
         SpectralNorm.apply(self, name='weight', n_power_iterations=1, dim=0, eps=1e-12)
 
 
@@ -347,7 +348,7 @@ if __name__ == '__main__':
         for _ in range(len(key_layers) + 1)
     ])
     
-    ckpt = os.path.join(os.path.dirname(__file__), '/mnt/bn/foundation-lq/tiankeyu/ckpt_vae/vit_small_patch16_224.pth')
+    ckpt = os.path.join('/home/china/Neesky/vaex/ckpt_vaex/vit_small_patch16_224_dino.pth')
 
     DinoDisc.forward
     dd = DinoDisc('cpu', dino_ckpt_path=ckpt, ks=ks, norm_type=norm_type, norm_eps=norm_eps, key_depths=key_layers)
