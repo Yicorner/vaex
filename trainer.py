@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from models import VectorQuantizer, VQVAE, DinoDisc
+from models import VectorQuantizer2, VQVAE, DinoDisc
 from utils import arg_util, misc, nan
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
@@ -93,7 +93,8 @@ class VAETrainer(object):
         with maybe_record_function('VAE_rec'):
             with self.vae_opt.amp_ctx:
                 self.vae_wo_ddp.forward
-                rec_B3HW, Lq, Le, usage = self.vae(inp, ret_usages=loggable)
+                rec_B3HW, usage, Lq,  = self.vae(inp, ret_usages=loggable)
+                Le = 0.0
                 B = rec_B3HW.shape[0]
                 inp_rec_no_grad = torch.cat((inp, rec_B3HW.data), dim=0)
             
@@ -293,7 +294,7 @@ class VAETrainer(object):
         for p_ema, p in zip(self.vae_ema.buffers(), self.vae_wo_ddp.buffers()):
             p_ema.data.copy_(p.data)
         quant, quant_ema = self.vae_wo_ddp.quantize, self.vae_ema.quantize
-        quant: VectorQuantizer
+        quant: VectorQuantizer2
         if hasattr(quant, 'using_ema') and quant.using_ema: # then embedding.weight requires no grad, thus is not in self.vae_ema_params; so need to update it manually
             if hasattr(quant, 'using_restart') and quant.using_restart:
                 # cannot use ema, cuz quantize.embedding uses replacement (rand restart)

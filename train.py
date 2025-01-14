@@ -235,6 +235,10 @@ def build_things_from_args(args: arg_util.Args):
         # ('glb_cls', disc_wo_ddp.glb_cls),
     )]) + '\n\n')
     
+    vae_ckpt = "vae_ch160v4096z32.pth"
+    vae_wo_ddp.load_state_dict(torch.load(vae_ckpt, map_location='cpu'), strict=True)
+    print("loaded vae ckpt from", vae_ckpt) 
+    
     # build optimizers
     optimizers: List[AmpOptimizer] = []
     for model_name, model_wo_ddp, opt_beta, lr, wd, clip in (('vae', vae_wo_ddp, args.vae_opt_beta, args.vae_lr, args.vae_wd, args.grad_clip), ('dis', disc_wo_ddp, args.disc_opt_beta, args.disc_lr, args.disc_wd, args.grad_clip)):
@@ -457,7 +461,7 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
                     f"speed: {iter_speed:.3f} ({min(tails):.3f}~{max(tails):.2f}) sec/iter  |  "
                     f"{img_per_sec:.1f} imgs/sec  |  "
                     f"{img_per_day:.2f}M imgs/day  |  "
-                    f"{img_per_day*(args.img_size//trainer.vae_wo_ddp.downsample_ratio)**2/1e3:.2f}B token/day  ||  "
+                    # f"{img_per_day*(args.img_size//trainer.vae_wo_ddp.downsample_ratio)**2/1e3:.2f}B token/day  ||  "
                     f"Peak nvidia-smi: {args.max_nvidia_smi:.2f} GB  ||  "
                     f"PyTorch mem - "
                     f"alloc: {memory_allocated:.2f}  |  "

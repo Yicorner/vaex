@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 
 
 # this file only provides the 2 modules used in VQVAE
-__all__ = ['CNNEncoder', 'CNNDecoder', ]
+__all__ = ['Encoder', 'Decoder',]
 
 
 """
@@ -38,7 +37,7 @@ class Downsample2x(nn.Module):
         return self.conv(F.pad(x, pad=(0, 1, 0, 1), mode='constant', value=0))
 
 
-class BnActConvBnActConv(nn.Module):
+class ResnetBlock(nn.Module):
     def __init__(self, *, in_channels, out_channels=None, dropout): # conv_shortcut=False,  # conv_shortcut: always False in VAE
         super().__init__()
         self.in_channels = in_channels
@@ -48,7 +47,7 @@ class BnActConvBnActConv(nn.Module):
         self.norm1 = Normalize(in_channels)
         self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.norm2 = Normalize(out_channels)
-        self.dropout = torch.nn.Dropout(dropout, inplace=True) if dropout > 1e-6 else nn.Identity()
+        self.dropout = torch.nn.Dropout(dropout) if dropout > 1e-6 else nn.Identity()
         self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
         if self.in_channels != self.out_channels:
             self.nin_shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
@@ -97,21 +96,21 @@ def make_attn(in_channels, using_sa=True):
     return AttnBlock(in_channels) if using_sa else nn.Identity()
 
 
-class CNNEncoder(nn.Module):
+class Encoder(nn.Module):
     def __init__(
-        self, *, ch=128, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2, dropout=0.0,
-        img_channels=3, output_channels=32, using_sa=True, using_mid_sa=True,
-        grad_ckpt=False,
+        self, *, ch=128, ch_mult=(1, 2, 4, 8), num_res_blocks=2,
+        dropout=0.0, in_channels=3,
+        z_channels, double_z=False, using_sa=True, using_mid_sa=True,
     ):
         super().__init__()
         self.ch = ch
         self.num_resolutions = len(ch_mult)
         self.downsample_ratio = 2 ** (self.num_resolutions - 1)
         self.num_res_blocks = num_res_blocks
-        self.grad_ckpt = grad_ckpt
+        self.in_channels = in_channels
         
         # downsampling
-        self.conv_in = torch.nn.Conv2d(img_channels, self.ch, kernel_size=3, stride=1, padding=1)
+        self.conv_in = torch.nn.Conv2d(in_channels, self.ch, kernel_size=3, stride=1, padding=1)
         
         in_ch_mult = (1,) + tuple(ch_mult)
         self.down = nn.ModuleList()
@@ -121,7 +120,7 @@ class CNNEncoder(nn.Module):
             block_in = ch * in_ch_mult[i_level]
             block_out = ch * ch_mult[i_level]
             for i_block in range(self.num_res_blocks):
-                block.append(BnActConvBnActConv(in_channels=block_in, out_channels=block_out, dropout=dropout))
+                block.append(ResnetBlock(in_channels=block_in, out_channels=block_out, dropout=dropout))
                 block_in = block_out
                 if i_level == self.num_resolutions - 1 and using_sa:
                     attn.append(make_attn(block_in, using_sa=True))
@@ -134,73 +133,57 @@ class CNNEncoder(nn.Module):
         
         # middle
         self.mid = nn.Module()
-        self.mid.block_1 = BnActConvBnActConv(in_channels=block_in, out_channels=block_in, dropout=dropout)
+        self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in, dropout=dropout)
         self.mid.attn_1 = make_attn(block_in, using_sa=using_mid_sa)
-        self.mid.block_2 = BnActConvBnActConv(in_channels=block_in, out_channels=block_in, dropout=dropout)
+        self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in, dropout=dropout)
         
         # end
         self.norm_out = Normalize(block_in)
-        self.conv_out = torch.nn.Conv2d(block_in, output_channels, kernel_size=3, stride=1, padding=1)
+        self.conv_out = torch.nn.Conv2d(block_in, (2 * z_channels if double_z else z_channels), kernel_size=3, stride=1, padding=1)
     
     def forward(self, x):
+        # downsampling
         h = self.conv_in(x)
-        if not self.grad_ckpt or not self.training:
-            # downsampling
-            for i_level in range(self.num_resolutions):
-                for i_block in range(self.num_res_blocks):
-                    h = self.down[i_level].block[i_block](h)
-                    if len(self.down[i_level].attn) > 0:
-                        h = self.down[i_level].attn[i_block](h)
-                if i_level != self.num_resolutions - 1:
-                    h = self.down[i_level].downsample(h)
-            # middle
-            h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(h)))
-            # end
-            h = self.conv_out(F.silu(self.norm_out(h), inplace=True))
-        else:
-            # downsampling
-            for i_level in range(self.num_resolutions):
-                for i_block in range(self.num_res_blocks):
-                    h = checkpoint(self.down[i_level].block[i_block], h, use_reentrant=False)
-                    if len(self.down[i_level].attn) > 0:
-                        h = checkpoint(self.down[i_level].attn[i_block], h, use_reentrant=False)
-                if i_level != self.num_resolutions - 1:
-                    h = checkpoint(self.down[i_level].downsample, h, use_reentrant=False)
-            # middle
-            h = checkpoint(self.mid.block_1, h, use_reentrant=False)
-            h = checkpoint(self.mid.attn_1, h, use_reentrant=False)
-            h = checkpoint(self.mid.block_2, h, use_reentrant=False)
-            # end
-            h = F.silu(self.norm_out(h), inplace=True)
-            h = checkpoint(self.conv_out, h, use_reentrant=False)
+        for i_level in range(self.num_resolutions):
+            for i_block in range(self.num_res_blocks):
+                h = self.down[i_level].block[i_block](h)
+                if len(self.down[i_level].attn) > 0:
+                    h = self.down[i_level].attn[i_block](h)
+            if i_level != self.num_resolutions - 1:
+                h = self.down[i_level].downsample(h)
         
+        # middle
+        h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(h)))
+        
+        # end
+        h = self.conv_out(F.silu(self.norm_out(h), inplace=True))
         return h
 
 
-class CNNDecoder(nn.Module):
+class Decoder(nn.Module):
     def __init__(
-        self, *, ch=128, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=3, dropout=0.0,
-        img_channels=3, input_channels=32, using_sa=True, using_mid_sa=True,
-        grad_ckpt=False,
+        self, *, ch=128, ch_mult=(1, 2, 4, 8), num_res_blocks=2,
+        dropout=0.0, in_channels=3,  # in_channels: raw img channels
+        z_channels, using_sa=True, using_mid_sa=True,
     ):
         super().__init__()
         self.ch = ch
         self.num_resolutions = len(ch_mult)
         self.num_res_blocks = num_res_blocks
-        self.grad_ckpt = grad_ckpt
+        self.in_channels = in_channels
         
         # compute in_ch_mult, block_in and curr_res at lowest res
         in_ch_mult = (1,) + tuple(ch_mult)
-        block_in = ch * ch_mult[-1]
+        block_in = ch * ch_mult[self.num_resolutions - 1]
         
         # z to block_in
-        self.conv_in = torch.nn.Conv2d(input_channels, block_in, kernel_size=3, stride=1, padding=1)
+        self.conv_in = torch.nn.Conv2d(z_channels, block_in, kernel_size=3, stride=1, padding=1)
         
         # middle
         self.mid = nn.Module()
-        self.mid.block_1 = BnActConvBnActConv(in_channels=block_in, out_channels=block_in, dropout=dropout)
+        self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in, dropout=dropout)
         self.mid.attn_1 = make_attn(block_in, using_sa=using_mid_sa)
-        self.mid.block_2 = BnActConvBnActConv(in_channels=block_in, out_channels=block_in, dropout=dropout)
+        self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in, dropout=dropout)
         
         # upsampling
         self.up = nn.ModuleList()
@@ -208,8 +191,8 @@ class CNNDecoder(nn.Module):
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_out = ch * ch_mult[i_level]
-            for i_block in range(self.num_res_blocks):
-                block.append(BnActConvBnActConv(in_channels=block_in, out_channels=block_out, dropout=dropout))
+            for i_block in range(self.num_res_blocks + 1):
+                block.append(ResnetBlock(in_channels=block_in, out_channels=block_out, dropout=dropout))
                 block_in = block_out
                 if i_level == self.num_resolutions-1 and using_sa:
                     attn.append(make_attn(block_in, using_sa=True))
@@ -222,33 +205,22 @@ class CNNDecoder(nn.Module):
         
         # end
         self.norm_out = Normalize(block_in)
-        self.conv_out = torch.nn.Conv2d(block_in, img_channels, kernel_size=3, stride=1, padding=1)
+        self.conv_out = torch.nn.Conv2d(block_in, in_channels, kernel_size=3, stride=1, padding=1)
     
     def forward(self, z):
-        if not self.grad_ckpt or not self.training:
-            # z to block_in and middle
-            h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(self.conv_in(z))))
-            # upsampling
-            for i_level in reversed(range(self.num_resolutions)):
-                for i_block in range(self.num_res_blocks):
-                    h = self.up[i_level].block[i_block](h)
-                    if len(self.up[i_level].attn) > 0:
-                        h = self.up[i_level].attn[i_block](h)
-                if i_level != 0:
-                    h = self.up[i_level].upsample(h)
-        else:
-            # z to block_in and middle
-            h = checkpoint(self.conv_in, z, use_reentrant=False)
-            h = checkpoint(self.mid.block_1, h, use_reentrant=False)
-            h = checkpoint(self.mid.attn_1, h, use_reentrant=False)
-            h = checkpoint(self.mid.block_2, h, use_reentrant=False)
-            # upsampling
-            for i_level in reversed(range(self.num_resolutions)):
-                for i_block in range(self.num_res_blocks):
-                    h = checkpoint(self.up[i_level].block[i_block], h, use_reentrant=False)
-                    if len(self.up[i_level].attn) > 0:
-                        h = checkpoint(self.up[i_level].attn[i_block], h, use_reentrant=False)
-                if i_level != 0:
-                    h = checkpoint(self.up[i_level].upsample, h, use_reentrant=False)
+        # z to block_in
+        # middle
+        h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(self.conv_in(z))))
         
-        return self.conv_out(F.silu(self.norm_out(h), inplace=True))
+        # upsampling
+        for i_level in reversed(range(self.num_resolutions)):
+            for i_block in range(self.num_res_blocks + 1):
+                h = self.up[i_level].block[i_block](h)
+                if len(self.up[i_level].attn) > 0:
+                    h = self.up[i_level].attn[i_block](h)
+            if i_level != 0:
+                h = self.up[i_level].upsample(h)
+        
+        # end
+        h = self.conv_out(F.silu(self.norm_out(h), inplace=True))
+        return h

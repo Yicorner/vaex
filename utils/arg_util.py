@@ -58,6 +58,8 @@ class Args(Tap):
     vocab_width: int = 32
     vocab_norm: bool = False
     vq_beta: float = 0.25           # commitment loss weight
+    share_quant_resi: int = 4
+    patch_nums: tuple = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
     
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers
@@ -71,9 +73,10 @@ class Args(Tap):
     reg_every: int = 4  # [NOT IMPLEMENTED YET]
     
     # initialization
-    vae_init: float = -0.5  # <0: xavier_normal_(gain=abs(init)); >0: trunc_normal_(std=init)
-    vocab_init: float = -1  # <0: uniform(-abs(init)*base, abs(init)*base), where base = 20/vocab_size; >0: trunc_normal_(std=init)
-    disc_init: float = 0.02 # <0: xavier_normal_(gain=abs(init)); >0: trunc_normal_(std=init)
+    ini: float = -1     # -1: automated model parameter initialization
+    hd: float = 0.02    # head.w *= hd
+    aln: float = 0.5    # the multiplier of ada_lin.w's initialization
+    alng: float = 1e-5  # the multiplier of ada_lin.w[gamma channels]'s initialization
     
     # optimization
     fp16: bool = False
