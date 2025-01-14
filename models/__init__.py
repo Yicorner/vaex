@@ -25,8 +25,18 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         ks=args.dino_kernel_size, norm_type=args.disc_norm, using_spec_norm=args.disc_spec_norm, norm_eps=1e-6,
     ).to(args.device)
     # init weights
-    vae.init_weights(init_adaln=args.aln, init_adaln_gamma=args.alng, init_head=args.hd, init_std=args.ini)
-    
+    need_init = [
+        vae.quant_conv,
+        vae.quantize,
+        vae.post_quant_conv,
+        vae.decoder,
+    ]
+    if isinstance(vae.encoder, Encoder):
+        need_init.insert(0, vae.encoder)
+    for vv in need_init:
+        init_weights(vv, args.vae_init)
+    init_weights(disc, args.disc_init)
+    # vae.quantize.init_vocab(args.vocab_init)
     return vae, disc
 
 

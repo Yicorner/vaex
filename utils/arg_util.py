@@ -73,10 +73,9 @@ class Args(Tap):
     reg_every: int = 4  # [NOT IMPLEMENTED YET]
     
     # initialization
-    ini: float = -1     # -1: automated model parameter initialization
-    hd: float = 0.02    # head.w *= hd
-    aln: float = 0.5    # the multiplier of ada_lin.w's initialization
-    alng: float = 1e-5  # the multiplier of ada_lin.w[gamma channels]'s initialization
+    vae_init: float = -0.5  # <0: xavier_normal_(gain=abs(init)); >0: trunc_normal_(std=init)
+    vocab_init: float = -1  # <0: uniform(-abs(init)*base, abs(init)*base), where base = 20/vocab_size; >0: trunc_normal_(std=init)
+    disc_init: float = 0.02 # <0: xavier_normal_(gain=abs(init)); >0: trunc_normal_(std=init)
     
     # optimization
     fp16: bool = False

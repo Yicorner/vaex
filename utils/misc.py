@@ -69,13 +69,23 @@ class TensorboardLogger(object):
         return self.step == 0 or (self.step + 1) % 500 == 0
     
     def update(self, head='scalar', step=None, **kwargs):
-        if step is None:
-            step = self.step
-            if not self.loggable(): return
         for k, v in kwargs.items():
-            if v is None: continue
-            if hasattr(v, 'item'): v = v.item()
-            self.writer.add_scalar(f'{head}/{k}', v, step)
+            if v is None:
+                continue
+            # assert isinstance(v, (float, int)), type(v)
+            if step is None:  # iter wise
+                it = self.step
+                if it == 0 or (it + 1) % 500 == 0:
+                    if hasattr(v, 'item'): v = v.item()
+                    self.writer.add_scalar(f'{head}/{k}', v, it)
+            else:  # epoch wise
+                if hasattr(v, 'item'): v = v.item()
+                # print(f'[update] {head}/{k}={v}')
+                if type(v) == list:
+                    self.writer.add_scalar(f'{head}/{k}', max(v), step)
+                else :
+                    self.writer.add_scalar(f'{head}/{k}', v, step)
+    
     
     def log_tensor_as_distri(self, tag, tensor1d, step=None):
         if step is None:
