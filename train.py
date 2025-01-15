@@ -385,6 +385,7 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
     [me.add_meter(x, misc.SmoothedValue(window_size=1, fmt='{median:.2f} ({global_avg:.2f})')) for x in ['gnm', 'dnm']]
     for l in ['L1', 'NLL', 'Ld', 'Wg']:
         me.add_meter(l, misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
+    me.add_meter("usage",misc.SmoothedValue(fmt='{median:.2f} ({global_avg:.2f})'))
     header = f'[Ep]: [{ep:4d}/{args.ep}]'
     
     touching_secs = 120

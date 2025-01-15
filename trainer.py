@@ -46,6 +46,8 @@ class VAETrainer(object):
         self.vae_params: Tuple[nn.Parameter] = tuple(self.vae_wo_ddp.parameters())
         self.disc_params: Tuple[nn.Parameter] = tuple(self.disc_wo_ddp.parameters())
         
+        self.usage_max = 0.0
+        
         self.ema_ratio = ema_ratio
         self.is_visualizer = is_visualizer
         self.using_ema = is_visualizer
@@ -94,6 +96,8 @@ class VAETrainer(object):
             with self.vae_opt.amp_ctx:
                 self.vae_wo_ddp.forward
                 rec_B3HW, usage, Lq,  = self.vae(inp, ret_usages=loggable)
+                if loggable:
+                    self.usage_max  = max(self.usage_max, max(usage))
                 Le = 0.0
                 B = rec_B3HW.shape[0]
                 inp_rec_no_grad = torch.cat((inp, rec_B3HW.data), dim=0)
@@ -240,7 +244,7 @@ class VAETrainer(object):
             if it == 0 or it in metric_lg.log_iters:
                 Lpip = Lpip.item()
                 Lnll = Lrec_for_log + Lpip
-                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d)
+                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d, usage=self.usage_max )
             
             # [tensorboard logging]
             if loggable:
