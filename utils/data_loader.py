@@ -19,7 +19,7 @@ class DIV2KData(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        img = Image.open(os.path.join(self.data_dir, self.data[idx]))
+        img = Image.open(os.path.join(self.data_dir, self.data[idx])).convert('RGB')
         if self.transform:
             img = self.transform(img)
         return img
