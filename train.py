@@ -19,10 +19,12 @@ import torch
 from torch.autograd.profiler import record_function
 from torch.utils.data import DataLoader
 
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import dist
 from utils import arg_util, misc
 from utils.data import build_dataset, pil_load
-from utils.data_sampler import DistInfiniteBatchSampler
+from utils.data_sampler import DistInfiniteBatchSampler, EvalDistributedSampler
 
 class CKPTSaver(object):
     def __init__(self, is_master: bool, eval_milestone: List[Tuple[float, float]]):
@@ -171,7 +173,7 @@ def build_things_from_args(args: arg_util.Args):
     # xl: -1~1,t
     if not args.local_debug:
         print(f'[build PT data] ...\n')
-        dataset_train, val_transform = build_dataset(datasets_str=args.data, subset_ratio=args.subset, final_reso=args.img_size, mid_reso=args.mid_reso, hflip=args.hflip)
+        dataset_train, dataset_val = build_dataset(datasets_str=args.data)
         ld_train = DataLoader(
             dataset=dataset_train, num_workers=args.workers, pin_memory=True,
             generator=args.get_different_generator_for_each_rank(), # worker_init_fn=worker_init_fn,
@@ -180,7 +182,14 @@ def build_things_from_args(args: arg_util.Args):
                 shuffle=True, fill_last=True, rank=dist.get_rank(), world_size=dist.get_world_size(), start_ep=start_ep, start_it=start_it,
             ),
         )
-        del dataset_train
+        ld_val = DataLoader(
+            dataset_val, num_workers=0, pin_memory=True,
+            batch_size=args.lbs,
+            sampler=EvalDistributedSampler(dataset_val, num_replicas=dist.get_world_size(), rank=dist.get_rank()),
+            shuffle=False, drop_last=False,
+        )
+        
+        del dataset_train, dataset_val
         [print(l) for l in auto_resume_info]
         print(f'[dataloader multi processing] ...', end='', flush=True)
         stt = time.time()
@@ -189,19 +198,6 @@ def build_things_from_args(args: arg_util.Args):
         # noinspection PyArgumentList
         print(f'     [dataloader multi processing](*) finished! ({time.time()-stt:.2f}s)', flush=True, clean=True)
         print(f'[dataloader] gbs={args.bs}, lbs={args.lbs}, iters_train={iters_train}')
-    else:
-        # dataset_mean, dataset_std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-        iters_train = ld_train = None
-        from torchvision.transforms import transforms, InterpolationMode
-        from utils.data import normalize_01_into_pm1
-        val_transform = transforms.Compose([
-            transforms.Resize(round(args.img_size*1.3), interpolation=InterpolationMode.LANCZOS),   # shorter edge would be the size
-            transforms.CenterCrop((args.img_size, args.img_size)),
-            transforms.ToTensor(),
-            # transforms.Normalize(mean, std, inplace=True),
-            normalize_01_into_pm1
-        ])
-        [print(l) for l in auto_resume_info]
     
     # import heavy packages after Dataloader object creation
     from torch.nn.parallel import DistributedDataParallel as DDP
@@ -235,9 +231,30 @@ def build_things_from_args(args: arg_util.Args):
         # ('glb_cls', disc_wo_ddp.glb_cls),
     )]) + '\n\n')
     
-    vae_ckpt = "vae_ch160v4096z32.pth"
-    vae_wo_ddp.load_state_dict(torch.load(vae_ckpt, map_location='cpu'), strict=True)
-    print("loaded vae ckpt from", vae_ckpt) 
+    if args.vocab_width == 32 and len(args.patch_nums)==10:
+        vae_ckpt = "vae_ch160v4096z32.pth"
+        checkpoint = torch.load(vae_ckpt, map_location='cpu')
+        # 下面代码是为了将4096的vocab_size和embedding.weight复制到新的模型中 
+        # 不建议加入git中
+        
+        with torch.no_grad():
+            # 初始化 ema_vocab_hit_SV 参数
+            torch.nn.init.zeros_(vae_wo_ddp.quantize.ema_vocab_hit_SV)
+            # 初始化 embedding.weight 参数
+            torch.nn.init.normal_(vae_wo_ddp.quantize.embedding.weight, mean=0.0, std=0.02)
+        
+            for i in range(min(checkpoint['quantize.ema_vocab_hit_SV'].shape[1],args.vocab_size)):
+                vae_wo_ddp.quantize.ema_vocab_hit_SV[:,i] = checkpoint['quantize.ema_vocab_hit_SV'][:,i]
+                vae_wo_ddp.quantize.embedding.weight[i,:] = checkpoint['quantize.embedding.weight'][i,:]
+        
+        if 'quantize.ema_vocab_hit_SV' in checkpoint:
+            del checkpoint['quantize.ema_vocab_hit_SV']
+        if 'quantize.embedding.weight' in checkpoint:
+            del checkpoint['quantize.embedding.weight']
+            
+        
+        vae_wo_ddp.load_state_dict(checkpoint, strict=False)
+        print("loaded vae ckpt from", vae_ckpt) 
     
     # build optimizers
     optimizers: List[AmpOptimizer] = []
@@ -300,75 +317,9 @@ def build_things_from_args(args: arg_util.Args):
         trainer.load_state_dict(trainer_state, strict=False)
     del vae, vae_wo_ddp, disc, disc_wo_ddp, vae_optim, disc_optim
     
-    func = lambda x: os.path.basename(x) not in {'v3_008d0681123bcdf1.jpg', 'v4_00938fc5a0223cf4.jpg', 'v6_013afe5493a1a41c.jpg'}
-    val_imgs = list(filter(func,  sorted(glob.glob(args.val_img_pattern))))
-    
-    if args.local_debug:
-        inp = []
-        for im in val_imgs:
-            im = pil_load(im, args.img_size * 2)
-            inp.append(val_transform(im))
-        inp = torch.stack(inp, dim=0).to(args.device, non_blocking=True)
-        print(f'[{inp.shape=}]')
-        
-        me = misc.MetricLogger(delimiter='  ')
-        dbg_it = 599
-        me.log_iters = {0, dbg_it}
-        print(f'{trainer.vae_wo_ddp.encoder.conv_in.weight.data.view(-1)[:4]=}')
-        args.seed_everything()
-        trainer.train_step(
-            ep=0, it=0, g_it=0, stepping=True, regularizing=False, metric_lg=me, logging_params=True, tb_lg=tb_lg,
-            inp=inp,
-            warmup_disc_schedule=0.0, fade_blur_schedule=0.8,
-            maybe_record_function=nullcontext,
-            args=args
-        )
-        trainer.train_step(
-            ep=1, it=dbg_it, g_it=dbg_it, stepping=True, regularizing=True, metric_lg=me, logging_params=True, tb_lg=tb_lg,
-            inp=inp,
-            warmup_disc_schedule=0.8, fade_blur_schedule=0.0,
-            maybe_record_function=nullcontext,
-            args=args
-        )
-        print({k: meter.global_avg for k, meter in me.meters.items()})
-        
-        if isinstance(sys.stdout, dist.BackupStreamToFile) and isinstance(sys.stderr, dist.BackupStreamToFile):
-            sys.stdout.close(), sys.stderr.close()
-        exit(0)
-    
-    # todo add is_old_exp=False
-    is_old_exp = False
-    vis_dir, vis_file = '_vis_cached', f'{"vae_oi1in" if is_old_exp else "vae_mine"}_8x{args.img_size}.pth'
-    vis_path = os.path.join(vis_dir, vis_file)
-    
-    print(f'[dld {vis_file}] before dld')
-    if not os.path.exists(vis_path):
-        if dist.is_local_master():
-            misc.os_system(f'mkdir -p {vis_dir}; cp ./ckpt_vgpt/{vis_file} {vis_dir}/ >/dev/null 2>&1')
-    dist.barrier()
-    
-    print(f'[dld {vis_file}] before load')
-    if os.path.exists(vis_path):
-        inp, label = torch.load(vis_path, map_location='cpu')
-        inp, label = inp.to(args.device, non_blocking=True), label.to(args.device, non_blocking=True)
-        print(f'[dld {vis_file}] {vis_path} successfully loaded.', flush=True)
-    else:
-        print(f'[dld {vis_file}] {vis_path} not found, now create and upload.', flush=True)
-        inp, label = [], []
-        for im in val_imgs:
-            im = pil_load(im, args.img_size * 2)
-            inp.append(val_transform(im))
-            label.append(0)
-        inp, label = torch.stack(inp, dim=0).to(args.device, non_blocking=True), torch.tensor(label, dtype=torch.long).to(args.device, non_blocking=True)
-        if dist.is_master():
-            torch.save([inp, label], vis_path)
-            misc.os_system(f'mkdir -p ./ckpt_vgpt; cp {vis_path} ./ckpt_vgpt/ >/dev/null 2>&1')
-    dist.barrier()
-    
-    del inp, label, val_transform
     return (
         tb_lg, trainer,
-        start_ep, start_it, acc_str, eval_milestone, iters_train, ld_train,
+        start_ep, start_it, acc_str, eval_milestone, iters_train, ld_train, ld_val,
     )
 
 
@@ -475,7 +426,7 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
             last_t_perf = time.perf_counter()
         
         if it < start_it: continue
-        if is_first_ep and it == start_it: warnings.resetwarnings()
+        # if is_first_ep and it == start_it: warnings.resetwarnings()
         
         if doing_profiling: profiler.step()
         
@@ -542,7 +493,7 @@ def main_training():
         return ret
     (
         tb_lg, trainer,
-        start_ep, start_it, acc_str, eval_milestone, iters_train, ld_train,
+        start_ep, start_it, acc_str, eval_milestone, iters_train, ld_train, ld_val,
     ) = ret
     
     # import heavy packages after Dataloader object creation
@@ -555,30 +506,18 @@ def main_training():
     
     # train
     start_time, min_Lnll, min_Ld, disc_start = time.time(), 999., 999., False
-    # seg8 = np.linspace(1, args.ep, 8+1, dtype=int).tolist()
-    seg5 = np.linspace(1, args.ep, 5+1, dtype=int).tolist()
     # noinspection PyTypeChecker
     logging_params_milestone: List[int] = np.linspace(1, args.ep, 10+1, dtype=int).tolist()
-    eval_milestone_ep = set(seg5[:])    # seg4
-    vis_milestone_ep = set(seg5[:]) | set(x for x in (2, 4, 8, 16) if x <= args.ep)
-    for x in [6, 12, 3, 24, 18, 48, 72, 96]:
-        if len(vis_milestone_ep) < 10 and x <= args.ep:
-            vis_milestone_ep.add(x)
-    
-    # save_milestone = list(range(5, args.ep, 2)) + [args.ep - 1]
-    # for i, m in enumerate(save_milestone):
-    #     if m != args.ep - 1 and m % 100 in {99, 0}:
-    #         save_milestone[i] -= 1
-    # save_milestone = set(save_milestone)
-    # if 0 in save_milestone: save_milestone.remove(0)
-    print(f'[PT milestones] eval={sorted(eval_milestone_ep)} vis={sorted(vis_milestone_ep)}')
+
     
     diff_t = torch.tensor([0.0, 0.0], dtype=torch.float32, device=args.device)
     trainer.vae_opt.log_param(ep=-1, tb_lg=tb_lg)
     trainer.disc_opt.log_param(ep=-1, tb_lg=tb_lg)
     time.sleep(3), gc.collect(), torch.cuda.empty_cache(), time.sleep(3)
     ep_lg = max(1, args.ep // 10) if args.ep <= 100 else max(1, args.ep // 20)
-    ckpt_num = 0
+
+    val_min_L_rec = 999.
+    
     for ep in range(start_ep, args.ep):
         if ep % ep_lg == 0 or ep == start_ep:
             print(f'[PT info] this exp is from ep{start_ep} it{start_it}, acc_str: {acc_str}, diffs: {args.diffs},        ==========>   bed: {args.bed}   h2: {args.tb_log_dir_path}  < ==========\n')
@@ -639,29 +578,28 @@ def main_training():
         tb_lg.update(head='PT_ep_loss', step=ep+1, **kw)
         tb_lg.update(head='PT_z_burnout', step=ep+1, rest_hours=round(sec / 60 / 60, 2))
         
-        # is_val_and_also_saving = (ep + 1) % 10 == 0 or (ep + 1) == args.ep
-        # if is_val_and_also_saving:
-        #     print(f' [*] [ep{ep}]  (val {tot})  Lm: {L_mean:.4f}, Lt: {L_tail:.4f}, Acc m&t: {acc_mean:.2f} {acc_tail:.2f},  Val cost: {cost:.2f}s')
-        ckpt_num = ep
-        print("ckpt_num:",ckpt_num)
-        if dist.is_local_master():
-            local_out_ckpt = os.path.join(args.local_out_dir_path, 'ckpt-last.pth')
-            local_out_ckpt_best = os.path.join(args.local_out_dir_path, 'ckpt-best.pth')
-            print(f'[saving ckpt] ...', end='', flush=True)
-            torch.save({
-                'epoch':    ep+1,
-                'iter':     0,
-                'trainer':  trainer.state_dict(),
-                'args':     args.state_dict(),
-            }, local_out_ckpt)
-            # if best_updated:
-            #     shutil.copy(local_out_ckpt, local_out_ckpt_best)
+        is_val_and_also_saving = (ep + 1) % 5 == 0 or (ep + 1) == args.ep
+        if is_val_and_also_saving:
+            
+            val_L_rec_mean = trainer.eval_ep(ld_val)
+            print(f' [*] [ep{ep}]  val_L_rec_mean: {val_L_rec_mean:.4f}')
 
-            
-            print(f'     [saving ckpt](*) finished!  @ {local_out_ckpt}', flush=True, clean=True)
-            
-            local_out_ckpt = os.path.join(args.local_out_dir_path, f'ckpt-{ckpt_num}.pth')        
-            if(ckpt_num % 10 == 0):
+            if dist.is_local_master():
+                local_out_ckpt = os.path.join(args.local_out_dir_path, 'ckpt-last.pth')
+                local_out_ckpt_best = os.path.join(args.local_out_dir_path, 'ckpt-best.pth')
+                print(f'[saving ckpt] ...', end='', flush=True)
+                # torch.save({
+                #     'epoch':    ep+1,
+                #     'iter':     0,
+                #     'trainer':  trainer.state_dict(),
+                #     'args':     args.state_dict(),
+                # }, local_out_ckpt)
+                print(f'     [saving ckpt](*) finished!  @ {local_out_ckpt}', flush=True, clean=True)
+                if val_L_rec_mean < val_min_L_rec:
+                    val_min_L_rec = val_L_rec_mean
+                    shutil.copyfile(local_out_ckpt, local_out_ckpt_best)
+                    
+                local_out_ckpt = os.path.join(args.local_out_dir_path, f'ckpt-{ep}.pth')        
                 torch.save({
                 'epoch':    ep+1,
                 'iter':     0,

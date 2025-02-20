@@ -2,7 +2,7 @@ import sys
 from copy import deepcopy
 from pprint import pformat
 from typing import Callable, Optional, Tuple
-
+import dist
 import seaborn as sns
 import torch
 import torch.nn as nn
@@ -79,7 +79,28 @@ class VAETrainer(object):
         if self.bcr > 0:
             self.bcr_strong_aug = DiffAug(prob=1, cutout=bcr_cut)
         self.disc_grad_ckpt = disc_grad_ckpt
-    
+        
+    @torch.no_grad()
+    def eval_ep(self, ld_val):
+        tot = 0
+        rec_loss = 0
+        self.vae_wo_ddp.eval()
+
+        for inp in ld_val:
+            inp = inp.to(dist.get_device(), non_blocking=True)
+
+            rec_B3HW, usage, Lq = self.vae_wo_ddp(inp)
+            rec_loss += F.l1_loss(rec_B3HW, inp)
+            tot += 1
+        
+        self.vae_wo_ddp.train()
+        
+        stats = rec_loss.new_tensor([rec_loss.item(), tot])
+        dist.allreduce(stats)
+        tot = round(stats[-1].item())
+        
+        return stats[0] / tot
+        
     # @profile(precision=4, stream=open('trainstep.log', 'w+'))
     def train_step(
         self, ep: int, it: int, g_it: int, stepping: bool, regularizing: bool, metric_lg: misc.MetricLogger, logging_params: bool, tb_lg: misc.TensorboardLogger,

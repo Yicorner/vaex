@@ -4,7 +4,7 @@ from torchvision.transforms import InterpolationMode, transforms
 from utils.data_loader import DIV2KData
 PImage.MAX_IMAGE_PIXELS = (1024 * 1024 * 1024 // 4 // 3) * 5
 ImageFile.LOAD_TRUNCATED_IMAGES = False
-
+import os
 
 def normalize_01_into_pm1(x):  # normalize x from [0, 1] to [-1, 1] by (x*2) - 1
     return x.add(x).add_(-1)
@@ -26,29 +26,24 @@ def pil_load(path: str, proposal_size):
 
 
 def build_dataset(
-    datasets_str: str, subset_ratio: float, final_reso: int, mid_reso=1.125, hflip=False,
+    datasets_str: str
 ):
-    # build augmentations
-    mid_reso = round(min(mid_reso, 2) * final_reso)  # first resize to mid_reso, then crop to final_reso
-    train_aug, val_aug = [
-        transforms.Resize(mid_reso, interpolation=InterpolationMode.LANCZOS),  # transforms.Resize: resize the shorter edge to mid_reso
-        transforms.RandomCrop((final_reso, final_reso)),
-        transforms.ToTensor(), normalize_01_into_pm1,
-    ], [
-        transforms.Resize(mid_reso, interpolation=InterpolationMode.LANCZOS),  # transforms.Resize: resize the shorter edge to mid_reso
-        transforms.CenterCrop((final_reso, final_reso)),
+    train_aug = [
         transforms.ToTensor(), normalize_01_into_pm1,
     ]
-    if hflip: train_aug.insert(0, transforms.RandomHorizontalFlip())
+    val_aug = [
+        transforms.ToTensor(), normalize_01_into_pm1,
+    ]
+
     train_aug, val_aug = transforms.Compose(train_aug), transforms.Compose(val_aug)
     
-    train_set = DIV2KData(data_dir=datasets_str, subset_ratio=subset_ratio, transform=train_aug)  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
+    train_set = DIV2KData(data_dir=os.path.join(datasets_str,"train"), transform=train_aug, augment=True)  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
+    val_set = DIV2KData(data_dir=os.path.join(datasets_str,"val"), transform=val_aug, augment=False)  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
     
     # log dataset
     print(f'[Dataset] {len(train_set)=}')
-    print_aug(train_aug, '[train]')
-    print_aug(val_aug, '[val]')
-    return train_set, val_aug
+    print(f'[Dataset] {len(val_set)=}')
+    return train_set, val_set
 
 
 def pil_loader(path):
