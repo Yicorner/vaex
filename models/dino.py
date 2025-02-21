@@ -1,3 +1,7 @@
+# TODO:Neesky 修改了spectral_norm中的        
+#   sigma = torch.dot(u, torch.mv(weight_mat, v))
+#   if(sigma < 1e-8): add
+#       sigma = 1e-8  add
 import math
 import os.path
 import random
@@ -9,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.spectral_norm import SpectralNorm
 from torchvision.transforms import RandomCrop
-
+import torch.nn.init as init
 import dist
 
 try:
@@ -121,6 +125,7 @@ class ResidualBlock(nn.Module):
 class SpectralConv1d(nn.Conv1d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # init.normal_(self.weight, mean=0.0, std=0.02)
         SpectralNorm.apply(self, name='weight', n_power_iterations=1, dim=0, eps=1e-12)
 
 

@@ -31,6 +31,7 @@ class Args(Tap):
     dino_path: str = ''         # vit_small_patch16_224.pth model weights
     val_img_pattern: str = ''
     data: str = './DIV2K_train_HR' # datasets, split by - or _, o: openimages, cc: cc12m, co: coco, fa: face data(ffhq+HumanArt+afhq+Internal), mj: midjourney, p: pinterest, px: (pexels+pixabay+unsplash)
+    val_and_saving_per_ep:int = 5
     
     # speed-up: torch.compile
     zero: int = 0               # todo: FSDP zero 2/3
@@ -59,7 +60,7 @@ class Args(Tap):
     vocab_norm: bool = False
     vq_beta: float = 0.25           # commitment loss weight
     share_quant_resi: int = 4
-    patch_nums: tuple = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
+    patch_nums: tuple = (1,3,5,8,12,16)
     
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers

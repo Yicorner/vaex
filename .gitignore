@@ -20,3 +20,7 @@ local_output*
 *.ipynb
 *.png
 *.zip
+*.JPEG
+*.jpg
+*.nii.gz
+*.rar

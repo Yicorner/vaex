@@ -578,7 +578,7 @@ def main_training():
         tb_lg.update(head='PT_ep_loss', step=ep+1, **kw)
         tb_lg.update(head='PT_z_burnout', step=ep+1, rest_hours=round(sec / 60 / 60, 2))
         
-        is_val_and_also_saving = (ep + 1) % 5 == 0 or (ep + 1) == args.ep
+        is_val_and_also_saving = (ep + 1) % args.val_and_saving_per_ep == 0 or (ep + 1) == args.ep
         if is_val_and_also_saving:
             
             val_L_rec_mean = trainer.eval_ep(ld_val)
@@ -588,12 +588,12 @@ def main_training():
                 local_out_ckpt = os.path.join(args.local_out_dir_path, 'ckpt-last.pth')
                 local_out_ckpt_best = os.path.join(args.local_out_dir_path, 'ckpt-best.pth')
                 print(f'[saving ckpt] ...', end='', flush=True)
-                # torch.save({
-                #     'epoch':    ep+1,
-                #     'iter':     0,
-                #     'trainer':  trainer.state_dict(),
-                #     'args':     args.state_dict(),
-                # }, local_out_ckpt)
+                torch.save({
+                    'epoch':    ep+1,
+                    'iter':     0,
+                    'trainer':  trainer.state_dict(),
+                    'args':     args.state_dict(),
+                }, local_out_ckpt)
                 print(f'     [saving ckpt](*) finished!  @ {local_out_ckpt}', flush=True, clean=True)
                 if val_L_rec_mean < val_min_L_rec:
                     val_min_L_rec = val_L_rec_mean

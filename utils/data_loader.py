@@ -33,13 +33,18 @@ class DIV2KData(Dataset):
         self.data_dir = data_dir
         self.transform = transform
         self.augment = augment
-        self.data = os.listdir(data_dir)
+        
+        if os.path.isdir(os.path.join(data_dir, 'HR')):
+            self.data = [os.path.join(os.path.join(data_dir, 'HR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'HR'))]
+            self.data = self.data + [os.path.join(os.path.join(data_dir, 'LR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'LR'))]
+        else:
+            self.data = os.listdir(data_dir)
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        img = Image.open(os.path.join(self.data_dir, self.data[idx])).convert('RGB')
+        img = Image.open(self.data[idx]).convert('RGB')
         # if self.target_shape:
         #     img = img.resize(self.target_shape, Image.BICUBIC)
         if self.augment:
@@ -55,35 +60,38 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     import numpy as np
     
-    fino_ = 256
-    img_list = os.listdir("./data/df2k_ost/GT")
-    for img in img_list:
-        img_path = os.path.join("./data/df2k_ost/GT", img)
-        im = Image.open(img_path)
+    train_set = DIV2KData(data_dir="./data/brats_256_t1_2021_pair_4x/train")  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
+    print(len(train_set))
+    
+    # fino_ = 256
+    # img_list = os.listdir("./data/brats_256_t1_2021_pair_4x")
+    # for img in img_list:
+    #     img_path = os.path.join("./data/df2k_ost/GT", img)
+    #     im = Image.open(img_path)
         
-        # 获取图片的宽度和高度
-        width, height = im.size
+    #     # 获取图片的宽度和高度
+    #     width, height = im.size
         
-        if width < fino_ or height < fino_:
-            # 计算最短边
-            if width < height:
-                new_width = fino_
-                new_height = int((fino_ / width) * height)  # 按照比例计算新高度
-            else:
-                new_height = fino_
-                new_width = int((fino_ / height) * width)  # 按照比例计算新宽度
+    #     if width < fino_ or height < fino_:
+    #         # 计算最短边
+    #         if width < height:
+    #             new_width = fino_
+    #             new_height = int((fino_ / width) * height)  # 按照比例计算新高度
+    #         else:
+    #             new_height = fino_
+    #             new_width = int((fino_ / height) * width)  # 按照比例计算新宽度
             
-            # 调整大小
-            im = im.resize((new_width, new_height))  # 使用ANTIALIAS来保持图像质量
+    #         # 调整大小
+    #         im = im.resize((new_width, new_height))  # 使用ANTIALIAS来保持图像质量
             
-            # 或者保存为新的文件
-        new_img_path = img_path.replace('GT', 'GT_resized')
-        im.save(new_img_path)
+    #         # 或者保存为新的文件
+    #     new_img_path = img_path.replace('GT', 'GT_resized')
+    #     im.save(new_img_path)
         
 
     
-    def normalize_01_into_pm1(x):  # normalize x from [0, 1] to [-1, 1] by (x*2) - 1
-        return x.add(x).add_(-1)
+    # def normalize_01_into_pm1(x):  # normalize x from [0, 1] to [-1, 1] by (x*2) - 1
+    #     return x.add(x).add_(-1)
     
     # mid_reso = 1.25
     # final_reso = 250
