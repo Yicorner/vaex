@@ -7,13 +7,21 @@ from torchvision import transforms
 from PIL import Image
 import random
 import numpy as np
+import math
 
-def center_crop_arr(pil_image, image_size):
+def center_crop_arr(pil_image, image_size, min_crop_frac=0.95, max_crop_frac=1.0):
     """
     Center cropping implementation from ADM.
     https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
     """
-    while min(*pil_image.size) >= 2 * image_size:
+    min_smaller_dim_size = math.ceil(image_size / max_crop_frac)
+    max_smaller_dim_size = math.ceil(image_size / min_crop_frac)
+    smaller_dim_size = random.randrange(min_smaller_dim_size, max_smaller_dim_size + 1)
+
+    # We are not on a new enough PIL to support the `reducing_gap`
+    # argument, which uses BOX downsampling at powers of two first.
+    # Thus, we do it by hand to improve downsample quality.
+    while min(*pil_image.size) >= 2 * smaller_dim_size:
         pil_image = pil_image.resize(
             tuple(x // 2 for x in pil_image.size), resample=Image.BOX
         )
