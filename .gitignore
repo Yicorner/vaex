@@ -17,10 +17,10 @@ local_output*
 *.ckpt
 *.log
 *.txt
-*.ipynb
 *.png
 *.zip
 *.JPEG
 *.jpg
 *.nii.gz
 *.rar
+*.nii
