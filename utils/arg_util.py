@@ -60,7 +60,7 @@ class Args(Tap):
     vocab_norm: bool = False
     vq_beta: float = 0.25           # commitment loss weight
     share_quant_resi: int = 4
-    patch_nums: tuple = (1,3,5,8,12,16)
+    patch_nums: tuple = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16) 
     
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers
