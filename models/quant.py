@@ -65,15 +65,13 @@ class VectorQuantizer2(nn.Module):
             vocab_hit_V = torch.zeros(self.vocab_size, dtype=torch.float, device=f_BChw.device)
             SN = len(self.v_patch_nums)
 
+            max_n = (len(self.v_patch_nums) + 1)
+            n_quantizers = torch.full((B,), max_n, dtype=torch.long)
+
             if self.training:
-                max_n = (len(self.v_patch_nums) + 1)
-                n_quantizers = torch.full((B,), max_n, dtype=torch.long)
                 n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
                 n_quantizers[n_dropout] = dropout[n_dropout]
                 n_quantizers=n_quantizers.to(device=f_BChw.device)
-            else:
-                # TODO 是不是有点问题
-                n_quantizers = torch.ones((B,)) * (self.v_patch_nums + 1)
 
             for si, pn in enumerate(self.v_patch_nums): # from small to large
                 # find the nearest embedding
