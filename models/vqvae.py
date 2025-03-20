@@ -24,8 +24,11 @@ class VQVAE(nn.Module):
         default_qresi_counts=0, # if is 0: automatically set to len(v_patch_nums)
         v_patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16), # number of patches for each scale, h_{1 to K} = w_{1 to K} = v_patch_nums[k]
         test_mode=True,
+        start_drop = 3,
     ):
         super().__init__()
+        self.v_patch_nums = v_patch_nums
+        self.start_drop = start_drop
         self.test_mode = test_mode
         self.V, self.Cvae = vocab_size, z_channels
         # ddconfig is copied from https://github.com/CompVis/latent-diffusion/blob/e66308c7f2e64cb581c6d27ab6fbeb846828253b/models/first_stage_models/vq-f16/config.yaml
@@ -55,7 +58,9 @@ class VQVAE(nn.Module):
     # ===================== `forward` is only used in VAE training =====================
     def forward(self, inp, ret_usages=False):   # -> rec_B3HW, idx_N, loss
         VectorQuantizer2.forward
-        f_hat, usages, vq_loss = self.quantize(self.quant_conv(self.encoder(inp)), ret_usages=ret_usages)
+        B = inp.shape[0]
+        dropout_rand = torch.randint(self.start_drop, len(self.v_patch_nums) + 1, (B,))  # to fix dropout across quantizers, skip first start_drop-1 quantizers
+        f_hat, usages, vq_loss = self.quantize(self.quant_conv(self.encoder(inp)), ret_usages=ret_usages, dropout = dropout_rand)
         return self.decoder(self.post_quant_conv(f_hat)), usages, vq_loss
     # ===================== `forward` is only used in VAE training =====================
     

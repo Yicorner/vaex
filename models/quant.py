@@ -17,8 +17,10 @@ class VectorQuantizer2(nn.Module):
     def __init__(
         self, vocab_size, Cvae, using_znorm, beta: float = 0.25,
         default_qresi_counts=0, v_patch_nums=None, quant_resi=0.5, share_quant_resi=4,  # share_quant_resi: args.qsr
+        codebook_drop=0.1
     ):
         super().__init__()
+        self.codebook_drop = codebook_drop
         self.vocab_size: int = vocab_size
         self.Cvae: int = Cvae
         self.using_znorm: bool = using_znorm
@@ -49,7 +51,7 @@ class VectorQuantizer2(nn.Module):
         return f'{self.v_patch_nums}, znorm={self.using_znorm}, beta={self.beta}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, f_BChw: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+    def forward(self, f_BChw: torch.Tensor, ret_usages=False, dropout = None) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
         dtype = f_BChw.dtype
         if dtype != torch.float32: f_BChw = f_BChw.float()
         B, C, H, W = f_BChw.shape
@@ -62,6 +64,16 @@ class VectorQuantizer2(nn.Module):
             mean_vq_loss: torch.Tensor = 0.0
             vocab_hit_V = torch.zeros(self.vocab_size, dtype=torch.float, device=f_BChw.device)
             SN = len(self.v_patch_nums)
+
+            if self.training:
+                max_n = (len(self.v_patch_nums) + 1)
+                n_quantizers = torch.ones((B,)) * max_n
+                n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
+                n_quantizers[n_dropout] = dropout[n_dropout]
+                n_quantizers = n_quantizers.to(f_BChw.device)
+            else:
+                n_quantizers = torch.ones((B,)) * (self.v_patch_nums + 1)
+
             for si, pn in enumerate(self.v_patch_nums): # from small to large
                 # find the nearest embedding
                 if self.using_znorm:
@@ -82,9 +94,14 @@ class VectorQuantizer2(nn.Module):
                 idx_Bhw = idx_N.view(B, pn, pn)
                 h_BChw = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
                 h_BChw = self.quant_resi[si/(SN-1)](h_BChw)
-                f_hat = f_hat + h_BChw
+
+                mask = (torch.full((B,), fill_value=si, device=h_BChw.device) < n_quantizers)[:, None, None, None].int()
+                
+                f_hat = f_hat + h_BChw * mask
                 f_rest -= h_BChw
                 
+                ratio = mask.sum() / B
+
                 if self.training and dist.initialized():
                     handler.wait()
                     if self.record_hit == 0: self.ema_vocab_hit_SV[si].copy_(hit_V)
@@ -92,7 +109,8 @@ class VectorQuantizer2(nn.Module):
                     else: self.ema_vocab_hit_SV[si].mul_(0.99).add_(hit_V.mul(0.01))
                     self.record_hit += 1
                 vocab_hit_V.add_(hit_V)
-                mean_vq_loss += F.mse_loss(f_hat.data, f_BChw).mul_(self.beta) + F.mse_loss(f_hat, f_no_grad)
+                mean_vq_loss += F.mse_loss(f_hat.data, f_BChw, reduction="none").mul_(mask).mul_(self.beta / ratio).mean() + \
+                            F.mse_loss(f_hat, f_no_grad, reduction="none").mul_(mask).mean() / ratio
             
             mean_vq_loss *= 1. / SN
             f_hat = (f_hat.data - f_no_grad).add_(f_BChw)
