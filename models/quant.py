@@ -67,9 +67,10 @@ class VectorQuantizer2(nn.Module):
 
             if self.training:
                 max_n = (len(self.v_patch_nums) + 1)
-                n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
+                n_quantizers = torch.full((B,), max_n, dtype=torch.long)
                 n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
                 n_quantizers[n_dropout] = dropout[n_dropout]
+                n_quantizers=n_quantizers.to(device=f_BChw.device)
             else:
                 # TODO 是不是有点问题
                 n_quantizers = torch.ones((B,)) * (self.v_patch_nums + 1)
