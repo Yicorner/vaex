@@ -71,8 +71,8 @@ class VectorQuantizer2(nn.Module):
             if self.training:
                 n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
                 n_quantizers[n_dropout] = dropout[n_dropout]
-                n_quantizers=n_quantizers.to(device=f_BChw.device)
-
+                
+            n_quantizers=n_quantizers.to(device=f_BChw.device)    
             for si, pn in enumerate(self.v_patch_nums): # from small to large
                 # find the nearest embedding
                 if self.using_znorm:
