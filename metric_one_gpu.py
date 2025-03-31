@@ -137,8 +137,8 @@ def get_img(args, ld_val, maxtot, ckpt_paths):
                 for i in range(data.shape[0]):
                     _data = data[i].transpose(1,2,0)
                     _rec_B3HW = rec_B3HW[i].transpose(1,2,0)
-                    Image.fromarray(_rec_B3HW).save(os.path.join(predict_dir,f"{index*data.shape[0]+i}.jpg"))
-                    Image.fromarray(_data).save(os.path.join(gt_dir,f"{index*data.shape[0]+i}.jpg"))
+                    Image.fromarray(_rec_B3HW).save(os.path.join(predict_dir,f"{index*data.shape[0]+i}.png"))
+                    Image.fromarray(_data).save(os.path.join(gt_dir,f"{index*data.shape[0]+i}.png"))
 
 def metric(metric_path,ckpt_paths):
 
@@ -165,7 +165,7 @@ def metric(metric_path,ckpt_paths):
         musiq_iqa = []
         maniqa_iqa = []
         clip_iqa = []
-        gt_img_paths.extend(sorted(glob.glob(f'{gt_dir}/*.jpg'))[:])
+        gt_img_paths.extend(sorted(glob.glob(f'{gt_dir}/*.png'))[:])
         
         
         for gt_img_path in tqdm(gt_img_paths):
@@ -209,8 +209,8 @@ if __name__ == "__main__":
     out_path = "./metric.txt"
     
     ckpt_paths = ["vae_ch160v4096z32.pth"]
-    ckpt_paths = ckpt_paths + sorted(glob.glob("local_output/ckpt*.pth"))
-    
+    ckpt_paths = ckpt_paths + sorted(glob.glob("metric_results/ckpt*.pth"))
+    print(ckpt_paths)
     # ckpt_paths = [f"local_output/ckpt-{i}.pth" for i in range(6,9)]
     
     args.vocab_size = 4096
