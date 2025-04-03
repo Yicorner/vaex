@@ -44,7 +44,7 @@ class DIV2KData(Dataset):
         
         if os.path.isdir(os.path.join(data_dir, 'HR')):
             self.data = [os.path.join(os.path.join(data_dir, 'HR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'HR'))]
-            self.data = self.data + [os.path.join(os.path.join(data_dir, 'LR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'LR'))]
+            # self.data = self.data + [os.path.join(os.path.join(data_dir, 'LR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'LR'))]
         else:
             self.data = os.listdir(data_dir)
 
