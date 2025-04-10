@@ -57,7 +57,8 @@ class DIV2KData(Dataset):
         # if self.target_shape:
         #     img = img.resize(self.target_shape, Image.BICUBIC)
         if self.augment:
-            img = center_crop_arr(img, img.size[0])
+            if random.random() > 0.33:
+                img = center_crop_arr(img, img.size[0])
             if random.random() > 0.5:
                 if "file" in self.data[idx] or "LIDC-IDRI" in self.data[idx]:
                     img = img.transpose(0)
