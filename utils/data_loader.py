@@ -59,7 +59,10 @@ class DIV2KData(Dataset):
         if self.augment:
             img = center_crop_arr(img, img.size[0])
             if random.random() > 0.5:
-                img = img.transpose(1)
+                if "file" in self.data[idx] or "LIDC-IDRI" in self.data[idx]:
+                    img = img.transpose(0)
+                else:
+                    img = img.transpose(1)
         if self.transform:
             img = self.transform(img)
         return img
