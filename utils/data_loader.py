@@ -9,7 +9,7 @@ import random
 import numpy as np
 import math
 
-def center_crop_arr(pil_image, image_size, min_crop_frac=0.95, max_crop_frac=1.0):
+def center_crop_arr(pil_image, image_size, min_crop_frac=0.9, max_crop_frac=1.0):
     """
     Center cropping implementation from ADM.
     https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
@@ -25,8 +25,9 @@ def center_crop_arr(pil_image, image_size, min_crop_frac=0.95, max_crop_frac=1.0
         pil_image = pil_image.resize(
             tuple(x // 2 for x in pil_image.size), resample=Image.BOX
         )
+    
+    scale = smaller_dim_size / min(*pil_image.size)
 
-    scale = image_size / min(*pil_image.size)
     pil_image = pil_image.resize(
         tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
     )
@@ -68,8 +69,28 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     import numpy as np
     
-    train_set = DIV2KData(data_dir="./data/brats_256_t1_2021_pair_4x/train")  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
-    print(len(train_set))
+    def normalize_01_into_pm1(x):  # normalize x from [0, 1] to [-1, 1] by (x*2) - 1
+        return x.add(x).add_(-1)
+
+    train_aug = [
+        transforms.ToTensor(), normalize_01_into_pm1,
+    ]
+    train_aug= transforms.Compose(train_aug)
+    train_set = DIV2KData(data_dir='/home/why/vaex/data/brats_256_t2_2021_pair_png_with_ref/train',transform=train_aug,augment=True)  # todo: junfeng; only `train_set` required, no need to create a 'validation_set'
+
+    ld_train = DataLoader(
+            dataset=train_set, num_workers=8, pin_memory=True ,batch_size=1
+        )
+    print("in")
+    for data in ld_train:
+        data =  (data.cpu().numpy() + 1.0 ) * 255.0 / 2
+        print(data.shape)
+        plt.figure()
+        plt.imshow(data[0].transpose(1, 2, 0).astype(np.uint8))
+        plt.savefig("temp.png")
+        
+        break
+    
     
     # fino_ = 256
     # img_list = os.listdir("./data/brats_256_t1_2021_pair_4x")
