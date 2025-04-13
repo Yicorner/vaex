@@ -106,7 +106,7 @@ def get_img(args, ld_val, maxtot, ckpt_paths):
         
         load_ckpt = torch.load(vae_ckpt, map_location='cpu')
         if 'trainer' in  load_ckpt.keys():
-            load_ckpt = load_ckpt['trainer']['vae_wo_ddp']
+            load_ckpt = load_ckpt['trainer']['vae_ema']
         vae.load_state_dict(load_ckpt)
         # vae.load_state_dict(torch.load(vae_ckpt_init, map_location='cpu'))
         vae.eval()

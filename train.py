@@ -236,6 +236,9 @@ def build_things_from_args(args: arg_util.Args):
         checkpoint = torch.load(vae_ckpt, map_location='cpu')
         # 下面代码是为了将4096的vocab_size和embedding.weight复制到新的模型中 
         # 不建议加入git中
+        if "trainer" in checkpoint.keys():
+            checkpoint = checkpoint['trainer']
+            checkpoint = checkpoint['vae_ema']
         
         with torch.no_grad():
             # 初始化 ema_vocab_hit_SV 参数
