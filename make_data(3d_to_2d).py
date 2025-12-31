@@ -14,7 +14,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from scipy.ndimage import zoom
 import torchio as tio
-import monai
+# import monai
 from torchvision import transforms
 from tqdm import tqdm
 
@@ -118,14 +118,16 @@ class BRATSDataset_one(Dataset):
         return img
     
 from PIL import Image
+
+gpath = '/mnt/d/DATA'
 if __name__ == '__main__':
     # dataset = Teeth256Dataset(root_dir='/media/why/牙齿数据/FYC/medicaldiffusion/data/teeth_focus/crop_256/image')
-    dataset = BRATSDataset_one(root_dir='./data/Brats2021', train=True, imgtype='t1', severity='HGG',augmentation = False)
+    dataset = BRATSDataset_one(root_dir = os.path.join(gpath, 'Brats2021'), train=True, imgtype='t1', severity='HGG',augmentation = False)
 
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-    image_out_train_dir = "./data/brats_256_t1_2021/train"
-    image_out_val_dir = "./data/brats_256_t1_2021/val"
-    image_out_test_dir = "./data/brats_256_t1_2021/test"
+    image_out_train_dir = os.path.join(gpath, 'brats_256_t1_2021/train')
+    image_out_val_dir = os.path.join(gpath, 'brats_256_t1_2021/val')
+    image_out_test_dir = os.path.join(gpath, 'brats_256_t1_2021/test')
     os.makedirs(image_out_train_dir, exist_ok=True)
     os.makedirs(image_out_val_dir, exist_ok=True)
     os.makedirs(image_out_test_dir, exist_ok=True)

@@ -232,7 +232,7 @@ def build_things_from_args(args: arg_util.Args):
     )]) + '\n\n')
     
     if args.vocab_width == 32 and len(args.patch_nums)==10:
-        vae_ckpt = "vae_ch160v4096z32.pth"
+        vae_ckpt = "/mnt/d/DATA/ckpt/vae_ch160v4096z32.pth"
         checkpoint = torch.load(vae_ckpt, map_location='cpu')
         # 下面代码是为了将4096的vocab_size和embedding.weight复制到新的模型中 
         # 不建议加入git中
