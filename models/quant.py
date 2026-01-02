@@ -8,24 +8,58 @@ from torch.nn import functional as F
 import dist
 
 
-# this file only provides the VectorQuantizer2 used in VQVAE
-__all__ = ['VectorQuantizer2',]
+# this file provides the ContinuousMultiScaleQuantizer for continuous VAE
+__all__ = ['ContinuousMultiScaleQuantizer',]
 
 
-class VectorQuantizer2(nn.Module):
-    # VQGAN originally use beta=1.0, never tried 0.25; SD seems using 0.25
+class DiagonalGaussianDistribution(object):
+    """Diagonal Gaussian distribution for reparameterization trick"""
+    def __init__(self, parameters, deterministic=False):
+        self.parameters = parameters
+        self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
+        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
+        self.deterministic = deterministic
+        self.std = torch.exp(0.5 * self.logvar)
+        self.var = torch.exp(self.logvar)
+        if self.deterministic:
+            self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
+    
+    def sample(self):
+        x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
+        return x
+    
+    def kl(self, other=None):
+        if self.deterministic:
+            return torch.Tensor([0.])
+        else:
+            if other is None:
+                return 0.5 * torch.sum(torch.pow(self.mean, 2)
+                                       + self.var - 1.0 - self.logvar,
+                                       dim=[1, 2, 3])
+            else:
+                return 0.5 * torch.sum(
+                    torch.pow(self.mean - other.mean, 2) / other.var
+                    + self.var / other.var - 1.0 - self.logvar + other.logvar,
+                    dim=[1, 2, 3])
+    
+    def mode(self):
+        return self.mean
+
+
+class ContinuousMultiScaleQuantizer(nn.Module):
+    """Continuous Multi-Scale VAE Quantizer using Gaussian distributions"""
     def __init__(
-        self, vocab_size, Cvae, using_znorm, beta: float = 0.25,
-        default_qresi_counts=0, v_patch_nums=None, quant_resi=0.5, share_quant_resi=4,  # share_quant_resi: args.qsr
+        self, Cvae, beta: float = 1.0,  # beta is now kl_weight
+        default_qresi_counts=0, v_patch_nums=None, quant_resi=0.5, share_quant_resi=4,
         codebook_drop=0.1
     ):
         super().__init__()
         self.codebook_drop = codebook_drop
-        self.vocab_size: int = vocab_size
         self.Cvae: int = Cvae
-        self.using_znorm: bool = using_znorm
         self.v_patch_nums: Tuple[int] = v_patch_nums
+        self.kl_weight: float = beta  # reuse beta as kl_weight
         
+        # quant_resi: feature refinement, still useful for continuous VAE
         self.quant_resi_ratio = quant_resi
         if share_quant_resi == 0:   # non-shared: \phi_{1 to K} for K scales
             self.quant_resi = PhiNonShared([(Phi(Cvae, quant_resi) if abs(quant_resi) > 1e-6 else nn.Identity()) for _ in range(default_qresi_counts or len(self.v_patch_nums))])
@@ -34,94 +68,110 @@ class VectorQuantizer2(nn.Module):
         else:                       # partially shared: \phi_{1 to share_quant_resi} for K scales
             self.quant_resi = PhiPartiallyShared(nn.ModuleList([(Phi(Cvae, quant_resi) if abs(quant_resi) > 1e-6 else nn.Identity()) for _ in range(share_quant_resi)]))
         
-        self.register_buffer('ema_vocab_hit_SV', torch.full((len(self.v_patch_nums), self.vocab_size), fill_value=0.0))
-        self.record_hit = 0
+        # For continuous VAE: conv layer to predict mean and logvar (output 2*Cvae channels)
+        # Each scale will use this shared predictor
+        self.mean_logvar_conv = nn.Conv2d(Cvae, 2 * Cvae, kernel_size=1, stride=1, padding=0)
         
-        self.beta: float = beta
-        self.embedding = nn.Embedding(self.vocab_size, self.Cvae)
-        
-        # only used for progressive training of VAR (not supported yet, will be tested and supported in the future)
-        self.prog_si = -1   # progressive training: not supported yet, prog_si always -1
-    
-    def eini(self, eini):
-        if eini > 0: nn.init.trunc_normal_(self.embedding.weight.data, std=eini)
-        elif eini < 0: self.embedding.weight.data.uniform_(-abs(eini) / self.vocab_size, abs(eini) / self.vocab_size)
+        # only used for progressive training (not supported yet)
+        self.prog_si = -1
     
     def extra_repr(self) -> str:
-        return f'{self.v_patch_nums}, znorm={self.using_znorm}, beta={self.beta}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
+        return f'{self.v_patch_nums}, kl_weight={self.kl_weight}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, f_BChw: torch.Tensor, ret_usages=False, dropout = None) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+    def forward(self, f_BChw: torch.Tensor, ret_usages=False, dropout=None) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+        """
+        Forward pass for continuous multi-scale VAE.
+        
+        Args:
+            f_BChw: encoder output features [B, C, H, W]
+            ret_usages: whether to return usage statistics (kept for compatibility, returns None)
+            dropout: dropout for stochastic depth (optional, for multi-scale dropout)
+        
+        Returns:
+            f_hat: reconstructed features [B, C, H, W]
+            usages: None (kept for compatibility with training loop)
+            kl_loss: KL divergence loss aggregated across all scales
+        """
         dtype = f_BChw.dtype
         if dtype != torch.float32: f_BChw = f_BChw.float()
         B, C, H, W = f_BChw.shape
-        f_no_grad = f_BChw.detach()
         
-        f_rest = f_no_grad.clone()
+        # For continuous VAE with multi-scale: process residuals at each scale
+        f_rest = f_BChw.clone()  # clone to avoid in-place modification, but keep gradient flow
         f_hat = torch.zeros_like(f_rest)
         
         with torch.amp.autocast('cuda', enabled=False):
-            mean_vq_loss: torch.Tensor = 0.0
-            vocab_hit_V = torch.zeros(self.vocab_size, dtype=torch.float, device=f_BChw.device)
+            total_kl_loss = 0.0
             SN = len(self.v_patch_nums)
-
-            max_n = (len(self.v_patch_nums) + 1)
-            n_quantizers = torch.full((B,), max_n, dtype=torch.long)
-
-            if self.training:
+            
+            # Stochastic depth: randomly skip some scales during training
+            max_n = SN
+            if self.training and dropout is not None and self.codebook_drop > 0:
+                n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
                 n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
                 n_quantizers[n_dropout] = dropout[n_dropout]
-                
-            n_quantizers=n_quantizers.to(device=f_BChw.device)    
-            for si, pn in enumerate(self.v_patch_nums): # from small to large
-                # find the nearest embedding
-                if self.using_znorm:
-                    rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
-                    rest_NC = F.normalize(rest_NC, dim=-1)
-                    idx_N = torch.argmax(rest_NC @ F.normalize(self.embedding.weight.data.T, dim=0), dim=1)
-                else:
-                    rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
-                    d_no_grad = torch.sum(rest_NC.square(), dim=1, keepdim=True) + torch.sum(self.embedding.weight.data.square(), dim=1, keepdim=False)
-                    d_no_grad.addmm_(rest_NC, self.embedding.weight.data.T, alpha=-2, beta=1)  # (B*h*w, vocab_size)
-                    idx_N = torch.argmin(d_no_grad, dim=1)
-                
-                hit_V = idx_N.bincount(minlength=self.vocab_size).float()
-                if self.training:
-                    if dist.initialized(): handler = tdist.all_reduce(hit_V, async_op=True)
-                
-                # calc loss
-                idx_Bhw = idx_N.view(B, pn, pn)
-                h_BChw = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
-                h_BChw = self.quant_resi[si/(SN-1)](h_BChw)
-
-                mask = (torch.full((B,), fill_value=si, device=h_BChw.device) < n_quantizers)[:, None, None, None].int()
-                
-                f_hat = f_hat + h_BChw * mask
-                f_rest -= h_BChw
-                
-                ratio = mask.sum() / B
-
-                if self.training and dist.initialized():
-                    handler.wait()
-                    if self.record_hit == 0: self.ema_vocab_hit_SV[si].copy_(hit_V)
-                    elif self.record_hit < 100: self.ema_vocab_hit_SV[si].mul_(0.9).add_(hit_V.mul(0.1))
-                    else: self.ema_vocab_hit_SV[si].mul_(0.99).add_(hit_V.mul(0.01))
-                    self.record_hit += 1
-                vocab_hit_V.add_(hit_V)
-                mean_vq_loss += F.mse_loss(f_hat.data, f_BChw, reduction="none").mul_(mask).mul_(self.beta / ratio).mean() + \
-                            F.mse_loss(f_hat, f_no_grad, reduction="none").mul_(mask).mean() / ratio
+            else:
+                n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
             
-            mean_vq_loss *= 1. / SN
-            f_hat = (f_hat.data - f_no_grad).add_(f_BChw)
+            # Multi-scale processing: from small to large
+            for si, pn in enumerate(self.v_patch_nums):
+                # Downsample residual to current scale
+                if si != SN - 1:
+                    rest_scale = F.interpolate(f_rest, size=(pn, pn), mode='area')
+                else:
+                    rest_scale = f_rest
+                
+                # Predict mean and logvar for Gaussian distribution
+                moments = self.mean_logvar_conv(rest_scale)  # [B, 2*C, pn, pn]
+                posterior = DiagonalGaussianDistribution(moments, deterministic=not self.training)
+                
+                # Sample from the distribution (reparameterization trick)
+                if self.training:
+                    h_scale = posterior.sample()  # [B, C, pn, pn]
+                else:
+                    h_scale = posterior.mode()  # use mean during inference
+                
+                # Compute KL divergence for this scale
+                kl_loss_scale = posterior.kl()  # [B]
+                kl_loss_scale = torch.mean(kl_loss_scale)  # scalar
+                
+                # Upsample to original resolution and apply feature refinement
+                if si != SN - 1:
+                    h_BChw = F.interpolate(h_scale, size=(H, W), mode='bicubic').contiguous()
+                else:
+                    h_BChw = h_scale.contiguous()
+                
+                h_BChw = self.quant_resi[si/(SN-1)](h_BChw)
+                
+                # Apply stochastic depth mask
+                mask = (torch.full((B,), fill_value=si, device=h_BChw.device) < n_quantizers)[:, None, None, None].float()
+                
+                # Accumulate features
+                f_hat = f_hat + h_BChw * mask
+                f_rest = f_rest - h_BChw  # update residual
+                
+                # Accumulate KL loss (weighted by mask ratio for stochastic depth)
+                ratio = mask.sum() / B if mask.sum() > 0 else 1.0
+                total_kl_loss += kl_loss_scale / ratio
+            
+            # Average KL loss across scales and apply weight
+            total_kl_loss = total_kl_loss / SN * self.kl_weight
         
-        margin = tdist.get_world_size() * (f_BChw.numel() / f_BChw.shape[1]) / self.vocab_size * 0.08
-        # margin = pn*pn / 100
-        if ret_usages: usages = [(self.ema_vocab_hit_SV[si] >= margin).float().mean().item() * 100 for si, pn in enumerate(self.v_patch_nums)]
-        else: usages = None
-        return f_hat, usages, mean_vq_loss
+        # For continuous VAE, no straight-through estimator needed - reparameterization trick handles gradients
+        # Return the accumulated features directly
+        
+        # usages is None for continuous VAE (no discrete codebook)
+        usages = None if not ret_usages else [None] * SN
+        
+        return f_hat.to(dtype), usages, total_kl_loss
     # ===================== `forward` is only used in VAE training =====================
     
     def embed_to_fhat(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale=True, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
+        """
+        Combine multi-scale features into final feature map(s).
+        For continuous VAE, ms_h_BChw contains sampled latent features at different scales.
+        """
         ls_f_hat_BChw = []
         B = ms_h_BChw[0].shape[0]
         H = W = self.v_patch_nums[-1]
@@ -137,8 +187,6 @@ class VectorQuantizer2(nn.Module):
                 if last_one: ls_f_hat_BChw = f_hat
                 else: ls_f_hat_BChw.append(f_hat.clone())
         else:
-            # WARNING: this is not the case in VQ-VAE training or inference (we'll interpolate every token map to the max H W, like above)
-            # WARNING: this should only be used for experimental purpose
             f_hat = ms_h_BChw[0].new_zeros(B, self.Cvae, self.v_patch_nums[0], self.v_patch_nums[0], dtype=torch.float32)
             for si, pn in enumerate(self.v_patch_nums): # from small to large
                 f_hat = F.interpolate(f_hat, size=(pn, pn), mode='bicubic')
@@ -149,38 +197,55 @@ class VectorQuantizer2(nn.Module):
         
         return ls_f_hat_BChw
     
-    def f_to_idxBl_or_fhat(self, f_BChw: torch.Tensor, to_fhat: bool, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[Union[torch.Tensor, torch.LongTensor]]:  # z_BChw is the feature from inp_img_no_grad
+    def f_to_fhat_multiscale(self, f_BChw: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.Tensor]:
+        """
+        Convert encoder features to multi-scale reconstructed features (inference mode).
+        For continuous VAE, this samples from the learned Gaussian distributions.
+        
+        Args:
+            f_BChw: encoder output features [B, C, H, W]
+            v_patch_nums: optional patch numbers for each scale
+        
+        Returns:
+            List of accumulated feature maps at each scale
+        """
         B, C, H, W = f_BChw.shape
-        f_no_grad = f_BChw.detach()
-        f_rest = f_no_grad.clone()
+        f_rest = f_BChw.clone()
         f_hat = torch.zeros_like(f_rest)
         
-        f_hat_or_idx_Bl: List[torch.Tensor] = []
+        ls_f_hat: List[torch.Tensor] = []
         
-        patch_hws = [(pn, pn) if isinstance(pn, int) else (pn[0], pn[1]) for pn in (v_patch_nums or self.v_patch_nums)]    # from small to large
+        patch_hws = [(pn, pn) if isinstance(pn, int) else (pn[0], pn[1]) for pn in (v_patch_nums or self.v_patch_nums)]
         assert patch_hws[-1][0] == H and patch_hws[-1][1] == W, f'{patch_hws[-1]=} != ({H=}, {W=})'
         
         SN = len(patch_hws)
-        for si, (ph, pw) in enumerate(patch_hws): # from small to large
-            if 0 <= self.prog_si < si: break    # progressive training: not supported yet, prog_si always -1
-            # find the nearest embedding
-            z_NC = F.interpolate(f_rest, size=(ph, pw), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
-            if self.using_znorm:
-                z_NC = F.normalize(z_NC, dim=-1)
-                idx_N = torch.argmax(z_NC @ F.normalize(self.embedding.weight.data.T, dim=0), dim=1)
-            else:
-                d_no_grad = torch.sum(z_NC.square(), dim=1, keepdim=True) + torch.sum(self.embedding.weight.data.square(), dim=1, keepdim=False)
-                d_no_grad.addmm_(z_NC, self.embedding.weight.data.T, alpha=-2, beta=1)  # (B*h*w, vocab_size)
-                idx_N = torch.argmin(d_no_grad, dim=1)
+        for si, (ph, pw) in enumerate(patch_hws):
+            if 0 <= self.prog_si < si: break  # progressive training not supported
             
-            idx_Bhw = idx_N.view(B, ph, pw)
-            h_BChw = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
+            # Downsample residual to current scale
+            if si != SN - 1:
+                rest_scale = F.interpolate(f_rest, size=(ph, pw), mode='area')
+            else:
+                rest_scale = f_rest
+            
+            # Predict mean and logvar, then sample (use mode during inference)
+            moments = self.mean_logvar_conv(rest_scale)
+            posterior = DiagonalGaussianDistribution(moments, deterministic=True)  # use mode for inference
+            h_scale = posterior.mode()
+            
+            # Upsample and refine
+            if si != SN - 1:
+                h_BChw = F.interpolate(h_scale, size=(H, W), mode='bicubic').contiguous()
+            else:
+                h_BChw = h_scale.contiguous()
+            
             h_BChw = self.quant_resi[si/(SN-1)](h_BChw)
-            f_hat.add_(h_BChw)
-            f_rest.sub_(h_BChw)
-            f_hat_or_idx_Bl.append(f_hat.clone() if to_fhat else idx_N.reshape(B, ph*pw))
+            f_hat = f_hat + h_BChw
+            f_rest = f_rest - h_BChw
+            
+            ls_f_hat.append(f_hat.clone())
         
-        return f_hat_or_idx_Bl
+        return ls_f_hat
     
     # ===================== idxBl_to_var_input: only used in VAR training, for getting teacher-forcing input =====================
     def idxBl_to_var_input(self, gt_ms_idx_Bl: List[torch.Tensor]) -> torch.Tensor:
