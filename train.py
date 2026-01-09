@@ -238,13 +238,49 @@ def build_things_from_args(args: arg_util.Args):
         # 注意：Continuous VAE不再使用embedding和ema_vocab_hit_SV，这些参数会被忽略
         # 不建议加入git中
         
-        # Checkpoint结构可能是两种格式：
-        # 1. 完整格式: {'trainer': {'vae_ema': {...}, 'vae_wo_ddp': {...}, ...}, 'args': {...}, ...}
-        # 2. 直接格式: {'encoder.weight': ..., 'decoder.weight': ..., ...} (直接是模型参数)
+        # ========== 打印checkpoint结构 ==========
+        print(f"\n{'='*60}")
+        print(f"[Checkpoint Structure Analysis]")
+        print(f"{'='*60}")
+        print(f"Top-level keys in checkpoint: {list(checkpoint.keys())}")
+        
         if "trainer" in checkpoint.keys():
-            # 提取trainer字典，然后提取EMA版本的VAE参数（更稳定）
+            print(f"\n[Trainer State]")
             trainer_state = checkpoint['trainer']
+            print(f"  Trainer keys: {list(trainer_state.keys())}")
+            
+            # 打印trainer中每个子模块的键（只显示前几个）
+            for key in trainer_state.keys():
+                if isinstance(trainer_state[key], dict):
+                    sub_keys = list(trainer_state[key].keys())
+                    print(f"  - {key}: dict with {len(sub_keys)} keys")
+                    if len(sub_keys) > 0:
+                        print(f"    First 10 keys: {sub_keys[:10]}")
+                else:
+                    print(f"  - {key}: {type(trainer_state[key])}")
+            
+            # 提取trainer字典，然后提取EMA版本的VAE参数（更稳定）
             checkpoint = trainer_state['vae_ema']  # 使用EMA版本而非vae_wo_ddp
+            print(f"\n[Extracted VAE EMA State]")
+            print(f"  Total parameters: {len(checkpoint.keys())}")
+            print(f"  First 20 parameter keys:")
+            for i, key in enumerate(list(checkpoint.keys())[:20]):
+                param_shape = checkpoint[key].shape if hasattr(checkpoint[key], 'shape') else 'N/A'
+                print(f"    {i+1:2d}. {key:50s} shape: {param_shape}")
+            if len(checkpoint.keys()) > 20:
+                print(f"    ... and {len(checkpoint.keys()) - 20} more parameters")
+        else:
+            print(f"\n[Direct Model State]")
+            print(f"  Total parameters: {len(checkpoint.keys())}")
+            print(f"  First 20 parameter keys:")
+            for i, key in enumerate(list(checkpoint.keys())[:20]):
+                param_shape = checkpoint[key].shape if hasattr(checkpoint[key], 'shape') else 'N/A'
+                print(f"    {i+1:2d}. {key:50s} shape: {param_shape}")
+            if len(checkpoint.keys()) > 20:
+                print(f"    ... and {len(checkpoint.keys()) - 20} more parameters")
+        
+        print(f"{'='*60}\n")
+        # ========== 打印结束 ==========
         
         # 移除Continuous VAE不需要的旧VQ-VAE参数
         legacy_keys = [
