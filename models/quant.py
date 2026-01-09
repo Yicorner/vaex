@@ -131,6 +131,9 @@ class ContinuousMultiScaleQuantizer(nn.Module):
             if self.training and dropout is not None and self.codebook_drop > 0:
                 n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
                 n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
+                # Ensure dropout is on the same device as n_quantizers
+                if isinstance(dropout, torch.Tensor):
+                    dropout = dropout.to(device=f_BChw.device)
                 n_quantizers[n_dropout] = dropout[n_dropout]
             else:
                 n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)

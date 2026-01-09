@@ -74,7 +74,7 @@ class VQVAE(nn.Module):
         """
         B = inp.shape[0]
         # Stochastic depth: randomly skip some scales during training
-        dropout_rand = torch.randint(self.start_drop, len(self.v_patch_nums) + 1, (B,))
+        dropout_rand = torch.randint(self.start_drop, len(self.v_patch_nums) + 1, (B,), device=inp.device)
         
         # Encode, quantize (sample from Gaussian), and decode
         f_encoded = self.encoder(inp)
