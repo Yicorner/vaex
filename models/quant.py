@@ -71,9 +71,30 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         # For continuous VAE: conv layer to predict mean and logvar (output 2*Cvae channels)
         # Each scale will use this shared predictor
         self.mean_logvar_conv = nn.Conv2d(Cvae, 2 * Cvae, kernel_size=1, stride=1, padding=0)
+        self._init_mean_logvar_conv()
         
         # only used for progressive training (not supported yet)
         self.prog_si = -1
+    
+    def _init_mean_logvar_conv(self):
+        """
+        Initialize mean_logvar_conv with proper strategy for VAE:
+        - Weight: xavier_normal_ initialization (same as other conv layers)
+        - Bias for mean channels: 0 (mean should start near 0)
+        - Bias for logvar channels: -2.0 (logvar should start small, std ≈ 0.37)
+        This prevents initial KL explosion and helps stable training.
+        """
+        # Initialize weight with xavier_normal (gain=1.0)
+        nn.init.xavier_normal_(self.mean_logvar_conv.weight.data, gain=1.0)
+        
+        if self.mean_logvar_conv.bias is not None:
+            # Split bias into mean and logvar parts
+            Cvae = self.Cvae
+            # Mean channels: initialize to 0
+            self.mean_logvar_conv.bias.data[:Cvae].zero_()
+            # Logvar channels: initialize to -2.0 (so initial std ≈ exp(-1) ≈ 0.37)
+            # This is a common practice in VAE to prevent initial KL explosion
+            self.mean_logvar_conv.bias.data[Cvae:].fill_(-2.0)
     
     def extra_repr(self) -> str:
         return f'{self.v_patch_nums}, kl_weight={self.kl_weight}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'

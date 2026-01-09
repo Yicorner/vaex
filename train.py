@@ -232,32 +232,37 @@ def build_things_from_args(args: arg_util.Args):
     )]) + '\n\n')
     
     if args.vocab_width == 32 and len(args.patch_nums)==10:
-        vae_ckpt = "/mnt/d/DATA/ckpt/vae_ch160v4096z32.pth"
+        vae_ckpt = "vae_ch160v4096z32.pth"
         checkpoint = torch.load(vae_ckpt, map_location='cpu')
-        # 下面代码是为了将4096的vocab_size和embedding.weight复制到新的模型中 
+        # 从旧的VQ-VAE checkpoint加载权重到新的Continuous VAE模型
+        # 注意：Continuous VAE不再使用embedding和ema_vocab_hit_SV，这些参数会被忽略
         # 不建议加入git中
+        
+        # Checkpoint结构可能是两种格式：
+        # 1. 完整格式: {'trainer': {'vae_ema': {...}, 'vae_wo_ddp': {...}, ...}, 'args': {...}, ...}
+        # 2. 直接格式: {'encoder.weight': ..., 'decoder.weight': ..., ...} (直接是模型参数)
         if "trainer" in checkpoint.keys():
-            checkpoint = checkpoint['trainer']
-            checkpoint = checkpoint['vae_ema']
+            # 提取trainer字典，然后提取EMA版本的VAE参数（更稳定）
+            trainer_state = checkpoint['trainer']
+            checkpoint = trainer_state['vae_ema']  # 使用EMA版本而非vae_wo_ddp
         
-        with torch.no_grad():
-            # 初始化 ema_vocab_hit_SV 参数
-            torch.nn.init.zeros_(vae_wo_ddp.quantize.ema_vocab_hit_SV)
-            # 初始化 embedding.weight 参数
-            torch.nn.init.normal_(vae_wo_ddp.quantize.embedding.weight, mean=0.0, std=0.02)
+        # 移除Continuous VAE不需要的旧VQ-VAE参数
+        legacy_keys = [
+            'quantize.ema_vocab_hit_SV', 
+            'quantize.embedding.weight',
+            'quantize.vocab_size',
+            'quantize.V',
+        ]
+        for key in legacy_keys:
+            if key in checkpoint:
+                del checkpoint[key]
         
-            for i in range(min(checkpoint['quantize.ema_vocab_hit_SV'].shape[1],args.vocab_size)):
-                vae_wo_ddp.quantize.ema_vocab_hit_SV[:,i] = checkpoint['quantize.ema_vocab_hit_SV'][:,i]
-                vae_wo_ddp.quantize.embedding.weight[i,:] = checkpoint['quantize.embedding.weight'][i,:]
-        
-        if 'quantize.ema_vocab_hit_SV' in checkpoint:
-            del checkpoint['quantize.ema_vocab_hit_SV']
-        if 'quantize.embedding.weight' in checkpoint:
-            del checkpoint['quantize.embedding.weight']
-            
-        
+        # 只加载encoder、decoder、quant_conv、post_quant_conv等共享部分的权重
+        # quantize层的mean_logvar_conv需要重新初始化（因为旧模型没有这个）
         vae_wo_ddp.load_state_dict(checkpoint, strict=False)
-        print("loaded vae ckpt from", vae_ckpt) 
+        # 重新初始化mean_logvar_conv（因为旧VQ-VAE没有这个层）
+        vae_wo_ddp.quantize._init_mean_logvar_conv()
+        print("loaded vae ckpt from", vae_ckpt, "(legacy VQ-VAE params ignored, mean_logvar_conv re-initialized)") 
     
     # build optimizers
     optimizers: List[AmpOptimizer] = []
