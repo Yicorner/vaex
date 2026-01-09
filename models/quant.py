@@ -167,7 +167,7 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         # Return the accumulated features directly
         
         # usages is None for continuous VAE (no discrete codebook)
-        usages = None if not ret_usages else [None] * SN
+        usages = None
         
         return f_hat.to(dtype), usages, total_kl_loss
     # ===================== `forward` is only used in VAE training =====================
