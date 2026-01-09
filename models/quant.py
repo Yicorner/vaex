@@ -143,7 +143,31 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 
                 # Compute KL divergence for this scale
                 kl_loss_scale = posterior.kl()  # [B]
-                kl_loss_scale = torch.mean(kl_loss_scale)  # scalar
+                # Normalize by spatial dimensions (H*W) and channels (C) to get per-pixel KL loss
+                # This prevents KL loss from being too large and causing gradient explosion
+                B_scale, C_scale, H_scale, W_scale = rest_scale.shape
+                kl_loss_scale_raw = kl_loss_scale.clone()  # for debugging
+                kl_loss_scale = kl_loss_scale / (C_scale * H_scale * W_scale)  # normalize to per-pixel
+                kl_loss_scale = torch.mean(kl_loss_scale)  # average over batch
+                
+                # Debug: print KL loss info for first few forward passes
+                if self.training and si == 0:  # only check on first scale to avoid repeated prints
+                    if not hasattr(self, '_debug_kl_count'):
+                        self._debug_kl_count = 0
+                    self._debug_kl_count += 1
+                    if self._debug_kl_count <= 3:  # print first 3 forward passes
+                        print(f'[KL Debug] ===== Forward pass #{self._debug_kl_count} debug info =====')
+                
+                if self.training and hasattr(self, '_debug_kl_count') and self._debug_kl_count <= 3 and si < 3:  # print first 3 scales
+                    kl_raw_mean = torch.mean(kl_loss_scale_raw).item()
+                    kl_raw_max = torch.max(kl_loss_scale_raw).item()
+                    kl_raw_min = torch.min(kl_loss_scale_raw).item()
+                    kl_normed = kl_loss_scale.item()
+                    print(f'[KL Debug] Scale {si}/{SN-1} (patch={pn}): '
+                          f'raw_kl mean={kl_raw_mean:.2e} min={kl_raw_min:.2e} max={kl_raw_max:.2e}, '
+                          f'norm_kl={kl_normed:.6f}, '
+                          f'shape=[B={B_scale}, C={C_scale}, H={H_scale}, W={W_scale}], '
+                          f'divisor={C_scale * H_scale * W_scale}')
                 
                 # Upsample to original resolution and apply feature refinement
                 if si != SN - 1:
@@ -162,6 +186,14 @@ class ContinuousMultiScaleQuantizer(nn.Module):
             
             # Average KL loss across scales and apply weight
             total_kl_loss = total_kl_loss / SN * self.kl_weight
+            
+            # Debug: print total KL loss info (for first few forward passes)
+            if self.training and hasattr(self, '_debug_kl_count') and self._debug_kl_count <= 3:
+                total_kl_before_weight = (total_kl_loss / self.kl_weight).item() if self.kl_weight > 0 else 0
+                total_kl_final = total_kl_loss.item()
+                print(f'[KL Debug] Total KL: avg_per_scale={total_kl_before_weight:.6f}, '
+                      f'kl_weight={self.kl_weight}, final_weighted={total_kl_final:.6f}, num_scales={SN}')
+                print(f'[KL Debug] ===== End forward pass #{self._debug_kl_count} debug =====')
         
         # For continuous VAE, no straight-through estimator needed - reparameterization trick handles gradients
         # Return the accumulated features directly
