@@ -51,10 +51,8 @@ class ContinuousMultiScaleQuantizer(nn.Module):
     def __init__(
         self, Cvae, beta: float = 1.0,  # beta is now kl_weight
         default_qresi_counts=0, v_patch_nums=None, quant_resi=0.5, share_quant_resi=4,
-        codebook_drop=0.1
     ):
         super().__init__()
-        self.codebook_drop = codebook_drop
         self.Cvae: int = Cvae
         self.v_patch_nums: Tuple[int] = v_patch_nums
         self.kl_weight: float = beta  # reuse beta as kl_weight
@@ -100,14 +98,13 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         return f'{self.v_patch_nums}, kl_weight={self.kl_weight}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, f_BChw: torch.Tensor, ret_usages=False, dropout=None) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+    def forward(self, f_BChw: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
         """
         Forward pass for continuous multi-scale VAE.
         
         Args:
             f_BChw: encoder output features [B, C, H, W]
             ret_usages: whether to return usage statistics (kept for compatibility, returns None)
-            dropout: dropout for stochastic depth (optional, for multi-scale dropout)
         
         Returns:
             f_hat: reconstructed features [B, C, H, W]
@@ -125,18 +122,6 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         with torch.amp.autocast('cuda', enabled=False):
             total_kl_loss = 0.0
             SN = len(self.v_patch_nums)
-            
-            # Stochastic depth: randomly skip some scales during training
-            max_n = SN
-            if self.training and dropout is not None and self.codebook_drop > 0:
-                n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
-                n_dropout = np.arange(B)[np.random.rand(B) < self.codebook_drop]
-                # Ensure dropout is on the same device as n_quantizers
-                if isinstance(dropout, torch.Tensor):
-                    dropout = dropout.to(device=f_BChw.device)
-                n_quantizers[n_dropout] = dropout[n_dropout]
-            else:
-                n_quantizers = torch.full((B,), max_n, dtype=torch.long, device=f_BChw.device)
             
             # Multi-scale processing: from small to large
             for si, pn in enumerate(self.v_patch_nums):
@@ -168,16 +153,12 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 
                 h_BChw = self.quant_resi[si/(SN-1)](h_BChw)
                 
-                # Apply stochastic depth mask
-                mask = (torch.full((B,), fill_value=si, device=h_BChw.device) < n_quantizers)[:, None, None, None].float()
-                
                 # Accumulate features
-                f_hat = f_hat + h_BChw * mask
+                f_hat = f_hat + h_BChw
                 f_rest = f_rest - h_BChw  # update residual
                 
-                # Accumulate KL loss (weighted by mask ratio for stochastic depth)
-                ratio = mask.sum() / B if mask.sum() > 0 else 1.0
-                total_kl_loss += kl_loss_scale / ratio
+                # Accumulate KL loss
+                total_kl_loss += kl_loss_scale
             
             # Average KL loss across scales and apply weight
             total_kl_loss = total_kl_loss / SN * self.kl_weight
