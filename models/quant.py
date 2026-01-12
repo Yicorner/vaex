@@ -17,7 +17,9 @@ class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
         self.parameters = parameters
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
-        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
+        # Stricter clamp for logvar to prevent var explosion
+        # logvar in [-10, 5] means var in [e^-10, e^5] = [4.5e-5, 148], more reasonable range
+        self.logvar = torch.clamp(self.logvar, -10.0, 5.0)
         self.deterministic = deterministic
         self.std = torch.exp(0.5 * self.logvar)
         self.var = torch.exp(self.logvar)
@@ -51,12 +53,15 @@ class ContinuousMultiScaleQuantizer(nn.Module):
     def __init__(
         self, Cvae, beta: float = 1.0,  # beta is now kl_weight
         default_qresi_counts=0, v_patch_nums=None, quant_resi=0.5, share_quant_resi=4,
+        debug_kl_count_limit: int = 3,
     ):
         super().__init__()
         self.Cvae: int = Cvae
         self.v_patch_nums: Tuple[int] = v_patch_nums
         self.kl_weight: float = beta  # reuse beta as kl_weight
-        
+        self.debug_kl_count_limit: int = debug_kl_count_limit
+        self._debug_kl_count = 0
+
         # quant_resi: feature refinement, still useful for continuous VAE
         self.quant_resi_ratio = quant_resi
         if share_quant_resi == 0:   # non-shared: \phi_{1 to K} for K scales
@@ -142,32 +147,43 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                     h_scale = posterior.mode()  # use mean during inference
                 
                 # Compute KL divergence for this scale
-                kl_loss_scale = posterior.kl()  # [B]
+                kl_loss_scale = posterior.kl()  # [B] - sum over C×H×W dimensions
                 # Normalize by spatial dimensions (H*W) and channels (C) to get per-pixel KL loss
                 # This prevents KL loss from being too large and causing gradient explosion
                 B_scale, C_scale, H_scale, W_scale = rest_scale.shape
                 kl_loss_scale_raw = kl_loss_scale.clone()  # for debugging
-                kl_loss_scale = kl_loss_scale / (C_scale * H_scale * W_scale)  # normalize to per-pixel
-                kl_loss_scale = torch.mean(kl_loss_scale)  # average over batch
+                # Normalize by C×H×W to get per-element KL loss, then average over batch
+                kl_loss_scale_per_element = kl_loss_scale / (C_scale * H_scale * W_scale)
+                
+                # Apply log1p transformation to compress large values and balance different scales
+                # log1p(x) = log(1+x) is more stable than log(x) and prevents domination by large scales
+                # This makes small-scale and large-scale KL losses more comparable
+                kl_loss_scale = torch.mean(torch.log1p(kl_loss_scale_per_element))
                 
                 # Debug: print KL loss info for first few forward passes
-                if self.training and si == 0:  # only check on first scale to avoid repeated prints
-                    if not hasattr(self, '_debug_kl_count'):
-                        self._debug_kl_count = 0
+                # 输出debug_kl_count和debug_kl_count_limit
+                if si == 0:  # only check on first scale to avoid repeated prints
                     self._debug_kl_count += 1
-                    if self._debug_kl_count <= 3:  # print first 3 forward passes
+                    if self._debug_kl_count <= self.debug_kl_count_limit:  # print first few forward passes
                         print(f'[KL Debug] ===== Forward pass #{self._debug_kl_count} debug info =====')
                 
-                if self.training and hasattr(self, '_debug_kl_count') and self._debug_kl_count <= 3 and si < 3:  # print first 3 scales
+                if self._debug_kl_count <= self.debug_kl_count_limit:  # print first few scales
                     kl_raw_mean = torch.mean(kl_loss_scale_raw).item()
                     kl_raw_max = torch.max(kl_loss_scale_raw).item()
                     kl_raw_min = torch.min(kl_loss_scale_raw).item()
-                    kl_normed = kl_loss_scale.item()
+                    kl_per_elem = torch.mean(kl_loss_scale_per_element).item()
+                    kl_log1p = kl_loss_scale.item()
+                    # Also print mean and logvar statistics
+                    mean_abs_mean = torch.mean(torch.abs(posterior.mean)).item()
+                    mean_abs_max = torch.max(torch.abs(posterior.mean)).item()
+                    logvar_mean = torch.mean(posterior.logvar).item()
+                    logvar_max = torch.max(posterior.logvar).item()
+                    logvar_min = torch.min(posterior.logvar).item()
                     print(f'[KL Debug] Scale {si}/{SN-1} (patch={pn}): '
-                          f'raw_kl mean={kl_raw_mean:.2e} min={kl_raw_min:.2e} max={kl_raw_max:.2e}, '
-                          f'norm_kl={kl_normed:.6f}, '
-                          f'shape=[B={B_scale}, C={C_scale}, H={H_scale}, W={W_scale}], '
-                          f'divisor={C_scale * H_scale * W_scale}')
+                          f'raw_kl mean={kl_raw_mean:.2e}, per_elem={kl_per_elem:.2e}, log1p={kl_log1p:.4f}, '
+                          f'shape=[B={B_scale}, C={C_scale}, H={H_scale}, W={W_scale}]')
+                    print(f'[KL Debug]   |mean| avg={mean_abs_mean:.2e} max={mean_abs_max:.2e}, '
+                          f'logvar avg={logvar_mean:.2e} min={logvar_min:.2e} max={logvar_max:.2e}')
                 
                 # Upsample to original resolution and apply feature refinement
                 if si != SN - 1:
@@ -181,14 +197,16 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 f_hat = f_hat + h_BChw
                 f_rest = f_rest - h_BChw  # update residual
                 
-                # Accumulate KL loss
+                # Accumulate KL loss with per-scale normalization
+                # Use log-scale normalization to balance different scales
+                # This prevents large-scale KL from dominating
                 total_kl_loss += kl_loss_scale
             
             # Average KL loss across scales and apply weight
             total_kl_loss = total_kl_loss / SN * self.kl_weight
             
             # Debug: print total KL loss info (for first few forward passes)
-            if self.training and hasattr(self, '_debug_kl_count') and self._debug_kl_count <= 3:
+            if self._debug_kl_count <= self.debug_kl_count_limit:
                 total_kl_before_weight = (total_kl_loss / self.kl_weight).item() if self.kl_weight > 0 else 0
                 total_kl_final = total_kl_loss.item()
                 print(f'[KL Debug] Total KL: avg_per_scale={total_kl_before_weight:.6f}, '

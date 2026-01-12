@@ -1,4 +1,5 @@
 import sys
+import os
 from copy import deepcopy
 from pprint import pformat
 from typing import Callable, Optional, Tuple
@@ -16,6 +17,7 @@ from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
+from utils.image_saver import save_reconstruction_comparison
 
 # from memory_profiler import profile
 
@@ -193,7 +195,7 @@ class VAETrainer(object):
                 Lv = Lnll + Lkl + self.wei_entropy * Le + wei_g * Lg
                 
                 # Debug: print loss components for first few iterations
-                if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < 3:
+                if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
                     if not hasattr(self, '_debug_loss_printed'):
                         self._debug_loss_printed = 0
                     Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
@@ -210,7 +212,7 @@ class VAETrainer(object):
             wei_g = None
             
             # Debug: print loss components for first few iterations (no discriminator)
-            if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < 3:
+            if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
                 if not hasattr(self, '_debug_loss_printed'):
                     self._debug_loss_printed = 0
                 Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
@@ -300,7 +302,27 @@ class VAETrainer(object):
             if it == 0 or it in metric_lg.log_iters:
                 Lpip = Lpip.item()
                 Lnll = Lrec_for_log + Lpip
-                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d, usage=self.usage_max )
+                Lkl_for_log = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
+                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Lkl=Lkl_for_log, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d, usage=self.usage_max )
+                
+                # Save reconstruction comparison images (only on master process)
+                if (args.save_reconstruction_images 
+                    and dist.is_master()):
+                    try:
+                        save_dir = os.path.join(args.local_out_dir_path, 'reconstruction_samples')
+                        saved_path = save_reconstruction_comparison(
+                            original=inp,
+                            reconstructed=rec_B3HW.detach(),
+                            save_dir=save_dir,
+                            ep=ep,
+                            it=it,
+                            max_samples=4,
+                        )
+                        # Optionally print save confirmation (can be commented out to reduce log clutter)
+                        # print(f'[Image saved] {saved_path}', flush=True)
+                    except Exception as e:
+                        # Don't crash training if image saving fails
+                        print(f'[Warning] Failed to save reconstruction images: {e}', flush=True)
             
             # [tensorboard logging]
             if loggable:

@@ -19,7 +19,7 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         setattr(clz, 'reset_parameters', lambda self: None)
     
     # build models
-    vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, test_mode=False, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums).to(args.device)
+    vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, test_mode=False, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums, debug_kl_count_limit=args.debug_kl_count_limit).to(args.device)
     disc = DinoDisc(
         device=args.device, depth=args.dino_depth, key_depths=(2, 5, 8, 11),
         ks=args.dino_kernel_size, norm_type=args.disc_norm, using_spec_norm=args.disc_spec_norm, norm_eps=1e-6,
