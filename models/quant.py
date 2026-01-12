@@ -128,6 +128,9 @@ class ContinuousMultiScaleQuantizer(nn.Module):
             total_kl_loss = 0.0
             SN = len(self.v_patch_nums)
             
+            self._debug_kl_count += 1
+            if self._debug_kl_count <= self.debug_kl_count_limit:  # print first few forward passes
+                print(f'[KL Debug] ===== Forward pass #{self._debug_kl_count} debug info =====')
             # Multi-scale processing: from small to large
             for si, pn in enumerate(self.v_patch_nums):
                 # Downsample residual to current scale
@@ -159,13 +162,6 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 # log1p(x) = log(1+x) is more stable than log(x) and prevents domination by large scales
                 # This makes small-scale and large-scale KL losses more comparable
                 kl_loss_scale = torch.mean(torch.log1p(kl_loss_scale_per_element))
-                
-                # Debug: print KL loss info for first few forward passes
-                # 输出debug_kl_count和debug_kl_count_limit
-                if si == 0:  # only check on first scale to avoid repeated prints
-                    self._debug_kl_count += 1
-                    if self._debug_kl_count <= self.debug_kl_count_limit:  # print first few forward passes
-                        print(f'[KL Debug] ===== Forward pass #{self._debug_kl_count} debug info =====')
                 
                 if self._debug_kl_count <= self.debug_kl_count_limit:  # print first few scales
                     kl_raw_mean = torch.mean(kl_loss_scale_raw).item()

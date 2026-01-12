@@ -626,8 +626,8 @@ def main_training():
         is_val_and_also_saving = (ep + 1) % args.val_and_saving_per_ep == 0 or (ep + 1) == args.ep
         if is_val_and_also_saving:
             
-            val_L_rec_mean = trainer.eval_ep(ld_val)
-            print(f' [*] [ep{ep}]  val_L_rec_mean: {val_L_rec_mean:.4f}')
+            val_L_rec_mean, val_psnr_mean, val_ssim_mean = trainer.eval_ep(ld_val)
+            print(f' [*] [ep{ep}]  val_L_rec_mean: {val_L_rec_mean:.4f}, PSNR: {val_psnr_mean:.4f}, SSIM: {val_ssim_mean:.4f}')
 
             if dist.is_local_master():
                 local_out_ckpt = os.path.join(args.local_out_dir_path, 'ckpt-last.pth')

@@ -10,6 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from torch.nn.parallel import DistributedDataParallel as DDP
+import numpy as np
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from models import ContinuousMultiScaleQuantizer, VQVAE, DinoDisc
 from utils import arg_util, misc, nan
@@ -86,6 +88,8 @@ class VAETrainer(object):
     def eval_ep(self, ld_val):
         tot = 0
         rec_loss = 0
+        psnr_sum = 0.0
+        ssim_sum = 0.0
         self.vae_wo_ddp.eval()
 
         for inp in ld_val:
@@ -93,15 +97,47 @@ class VAETrainer(object):
 
             rec_B3HW, usage, Lq = self.vae_wo_ddp(inp)
             rec_loss += F.l1_loss(rec_B3HW, inp)
-            tot += 1
+            
+            # Convert from [-1, 1] to [0, 1] for PSNR/SSIM calculation
+            inp_norm = (inp + 1.0) / 2.0
+            rec_norm = (rec_B3HW + 1.0) / 2.0
+            inp_norm = inp_norm.clamp(0, 1)
+            rec_norm = rec_norm.clamp(0, 1)
+            
+            # Calculate PSNR and SSIM for each image in the batch
+            batch_size = inp_norm.shape[0]
+            for i in range(batch_size):
+                # Convert to numpy and transpose from [C, H, W] to [H, W, C]
+                inp_img = inp_norm[i].cpu().numpy().transpose(1, 2, 0)
+                rec_img = rec_norm[i].cpu().numpy().transpose(1, 2, 0)
+                
+                # Calculate PSNR
+                psnr_val = peak_signal_noise_ratio(inp_img, rec_img, data_range=1.0)
+                psnr_sum += psnr_val
+                
+                # Calculate SSIM (for RGB images)
+                # Try channel_axis first (newer skimage), fallback to multichannel (older skimage)
+                try:
+                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, channel_axis=2)
+                except TypeError:
+                    # Fallback for older skimage versions
+                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, multichannel=True)
+                ssim_sum += ssim_val
+            
+            tot += batch_size
         
         self.vae_wo_ddp.train()
         
-        stats = rec_loss.new_tensor([rec_loss.item(), tot])
+        # Aggregate statistics across all processes
+        stats = rec_loss.new_tensor([rec_loss.item(), psnr_sum, ssim_sum, tot])
         dist.allreduce(stats)
         tot = round(stats[-1].item())
         
-        return stats[0] / tot
+        l1_loss_mean = stats[0].item() / tot
+        psnr_mean = stats[1].item() / tot
+        ssim_mean = stats[2].item() / tot
+        
+        return l1_loss_mean, psnr_mean, ssim_mean
         
     # @profile(precision=4, stream=open('trainstep.log', 'w+'))
     def train_step(
