@@ -368,7 +368,7 @@ def build_things_from_args(args: arg_util.Args):
 
 
 g_speed_ls = deque(maxlen=128)
-def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, args: arg_util.Args, tb_lg: misc.TensorboardLogger, ld_or_itrt, iters_train: int, trainer, logging_params_milestone):
+def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, args: arg_util.Args, tb_lg: misc.TensorboardLogger, ld_or_itrt, iters_train: int, trainer, logging_params_milestone, ld_val=None):
     # import heavy packages after Dataloader object creation
     from trainer import VAETrainer
     from utils.lr_control import lr_wd_annealing
@@ -523,6 +523,14 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
                 d_ratio = 1 if grad_norm_d is None else min(1.0, args.grad_clip / (grad_norm_d + 1e-7))
                 tb_lg.update(head='PT_opt_lr/lr_max', actu_glr=g_ratio*max_glr, actu_dlr=d_ratio*max_dlr)
                 tb_lg.update(head='PT_opt_lr/lr_min', actu_glr=g_ratio*min_glr, actu_dlr=d_ratio*min_dlr)
+            
+            # Quick validation during training (using limited batches for speed)
+            if ld_val is not None and it in me.log_iters:
+                # Use 10 batches for quick validation to avoid slowing down training too much
+                val_L_rec_mean, val_psnr_mean, val_ssim_mean = trainer.eval_ep(ld_val, max_batches=10)
+                print(f' [*] [ep{ep}] [it{it}]  val_L_rec_mean: {val_L_rec_mean:.4f}, PSNR: {val_psnr_mean:.4f}, SSIM: {val_ssim_mean:.4f} (quick val, 10 batches)')
+                if tb_lg.loggable():
+                    tb_lg.update(head='PT_iter_val', val_L1=val_L_rec_mean, val_PSNR=val_psnr_mean, val_SSIM=val_ssim_mean, step=g_it)
     
     me.synchronize_between_processes()
     return {k: meter.global_avg for k, meter in me.meters.items()}, me.iter_time.time_preds(max_it - (g_it + 1) + (args.ep - ep) * 15)  # +15: other cost
@@ -580,7 +588,7 @@ def main_training():
             sdp_kernel_select_ctx = nullcontext()
         with sdp_kernel_select_ctx:
             stats, (sec, remain_time, finish_time) = train_one_ep(
-                ep, ep == start_ep, start_it if ep == start_ep else 0, saver, args, tb_lg, ld_train, iters_train, trainer, logging_params_milestone
+                ep, ep == start_ep, start_it if ep == start_ep else 0, saver, args, tb_lg, ld_train, iters_train, trainer, logging_params_milestone, ld_val=ld_val
             )
         
         Lnll, L1, Ld, wei_g = stats['NLL'], stats['L1'], stats['Ld'], stats['Wg']

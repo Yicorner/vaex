@@ -85,14 +85,26 @@ class VAETrainer(object):
         self.disc_grad_ckpt = disc_grad_ckpt
         
     @torch.no_grad()
-    def eval_ep(self, ld_val):
+    def eval_ep(self, ld_val, max_batches=None):
+        """
+        Evaluate on validation set.
+        
+        Args:
+            ld_val: Validation dataloader
+            max_batches: Maximum number of batches to evaluate. If None, evaluates on entire validation set.
+                        Useful for quick validation during training.
+        """
         tot = 0
         rec_loss = 0
         psnr_sum = 0.0
         ssim_sum = 0.0
         self.vae_wo_ddp.eval()
 
+        batch_count = 0
         for inp in ld_val:
+            if max_batches is not None and batch_count >= max_batches:
+                break
+                
             inp = inp.to(dist.get_device(), non_blocking=True)
 
             rec_B3HW, usage, Lq = self.vae_wo_ddp(inp)
@@ -125,6 +137,7 @@ class VAETrainer(object):
                 ssim_sum += ssim_val
             
             tot += batch_size
+            batch_count += 1
         
         self.vae_wo_ddp.train()
         
