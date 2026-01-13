@@ -541,6 +541,14 @@ def main_training():
     if args.dbg_unused:
         torch.autograd.set_detect_anomaly(True)
     
+    # Print training title/note if provided
+    if args.exp_note and dist.is_master():
+        border = '=' * 80
+        print('\n' + border, flush=True)
+        print(f'  🎯 TRAINING TITLE: {args.exp_note}', flush=True)
+        print(f'  📁 Experiment: {args.exp_name}', flush=True)
+        print(border + '\n', flush=True)
+    
     ret = build_things_from_args(args)
     if len(ret) < 8:
         return ret

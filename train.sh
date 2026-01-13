@@ -5,6 +5,7 @@ DATA_PATH_LARGE="/home/featurize/data/brats_256_t2_2021_pair_png_with_ref"
 export CUDA_VISIBLE_DEVICES=0
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13333 train.py \
 --exp_name="brats_256_t2_2021_pair_png_with_ref" --bed="myvaex" \
+--exp_note="测试新的patch_nums配置: 5,6,8,10,13,16" \
 --lbs=4 --vae_lr=1e-4 --disc_lr=1e-4 \
 --data="$DATA_PATH_LARGE"  \
 --val_and_saving_per_ep=1 \

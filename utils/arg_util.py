@@ -26,6 +26,7 @@ import dist
 class Args(Tap):
     exp_name: str       # MUST BE specified as `<tag>-<exp_name>`, e.g., vlip-exp1_cnn_lr1e-4
     bed: str            # MUST BE specified, Bytenas Experiment Directory
+    exp_note: str = ''  # Training title/description for easy identification in logs (e.g., "测试新的patch_nums配置")
     resume: str = ''            # if specified, load this checkpoint; if not, load the latest checkpoint in bed (if existing)
     lpips_path: str = ''        # lpips VGG model weights
     dino_path: str = ''         # vit_small_patch16_224.pth model weights
@@ -60,7 +61,7 @@ class Args(Tap):
     vocab_norm: bool = False
     vq_beta: float = 0.25           # commitment loss weight
     share_quant_resi: int = 4
-    patch_nums: tuple = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16) 
+    patch_nums: tuple = (5, 6, 8, 10, 13, 16) 
     
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers
