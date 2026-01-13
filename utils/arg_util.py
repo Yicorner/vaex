@@ -88,6 +88,9 @@ class Args(Tap):
     grad_clip: float = 10   # <=0 for not using grad clip
     ema: float = 0.9999     # ema ratio
     
+    # visualization
+    save_reconstruction_images: bool = True  # Save original and reconstructed images during training
+    
     warmup_ep: float = 0    # lr warmup: epochs
     wp0: float = 0.005      # lr warmup: initial lr ratio
     sche: str = 'cos'       # lr schedule type
@@ -130,6 +133,8 @@ class Args(Tap):
     local_debug: bool = 'KEVIN_LOCAL' in os.environ
     dbg_unused: bool = False
     dbg_nan: bool = False   # 'KEVIN_LOCAL' in os.environ
+    debug_loss_printed_limit: int = 3  # limit for printing loss debug info in trainer
+    debug_kl_count_limit: int = 3      # limit for printing KL debug info in quantizer
     
     # would be automatically set in runtime
     cmd: str = ' '.join(sys.argv[1:])  # [automatically set; don't specify this]

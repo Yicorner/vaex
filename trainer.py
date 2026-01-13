@@ -1,4 +1,5 @@
 import sys
+import os
 from copy import deepcopy
 from pprint import pformat
 from typing import Callable, Optional, Tuple
@@ -9,13 +10,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from torch.nn.parallel import DistributedDataParallel as DDP
+import numpy as np
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
-from models import VectorQuantizer2, VQVAE, DinoDisc
+from models import ContinuousMultiScaleQuantizer, VQVAE, DinoDisc
 from utils import arg_util, misc, nan
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
+from utils.image_saver import save_reconstruction_comparison
 
 # from memory_profiler import profile
 
@@ -81,25 +85,72 @@ class VAETrainer(object):
         self.disc_grad_ckpt = disc_grad_ckpt
         
     @torch.no_grad()
-    def eval_ep(self, ld_val):
+    def eval_ep(self, ld_val, max_batches=None):
+        """
+        Evaluate on validation set.
+        
+        Args:
+            ld_val: Validation dataloader
+            max_batches: Maximum number of batches to evaluate. If None, evaluates on entire validation set.
+                        Useful for quick validation during training.
+        """
         tot = 0
         rec_loss = 0
+        psnr_sum = 0.0
+        ssim_sum = 0.0
         self.vae_wo_ddp.eval()
 
+        batch_count = 0
         for inp in ld_val:
+            if max_batches is not None and batch_count >= max_batches:
+                break
+                
             inp = inp.to(dist.get_device(), non_blocking=True)
 
             rec_B3HW, usage, Lq = self.vae_wo_ddp(inp)
             rec_loss += F.l1_loss(rec_B3HW, inp)
-            tot += 1
+            
+            # Convert from [-1, 1] to [0, 1] for PSNR/SSIM calculation
+            inp_norm = (inp + 1.0) / 2.0
+            rec_norm = (rec_B3HW + 1.0) / 2.0
+            inp_norm = inp_norm.clamp(0, 1)
+            rec_norm = rec_norm.clamp(0, 1)
+            
+            # Calculate PSNR and SSIM for each image in the batch
+            batch_size = inp_norm.shape[0]
+            for i in range(batch_size):
+                # Convert to numpy and transpose from [C, H, W] to [H, W, C]
+                inp_img = inp_norm[i].cpu().numpy().transpose(1, 2, 0)
+                rec_img = rec_norm[i].cpu().numpy().transpose(1, 2, 0)
+                
+                # Calculate PSNR
+                psnr_val = peak_signal_noise_ratio(inp_img, rec_img, data_range=1.0)
+                psnr_sum += psnr_val
+                
+                # Calculate SSIM (for RGB images)
+                # Try channel_axis first (newer skimage), fallback to multichannel (older skimage)
+                try:
+                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, channel_axis=2)
+                except TypeError:
+                    # Fallback for older skimage versions
+                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, multichannel=True)
+                ssim_sum += ssim_val
+            
+            tot += batch_size
+            batch_count += 1
         
         self.vae_wo_ddp.train()
         
-        stats = rec_loss.new_tensor([rec_loss.item(), tot])
+        # Aggregate statistics across all processes
+        stats = rec_loss.new_tensor([rec_loss.item(), psnr_sum, ssim_sum, tot])
         dist.allreduce(stats)
         tot = round(stats[-1].item())
         
-        return stats[0] / tot
+        l1_loss_mean = stats[0].item() / tot
+        psnr_mean = stats[1].item() / tot
+        ssim_mean = stats[2].item() / tot
+        
+        return l1_loss_mean, psnr_mean, ssim_mean
         
     # @profile(precision=4, stream=open('trainstep.log', 'w+'))
     def train_step(
@@ -116,13 +167,23 @@ class VAETrainer(object):
         with maybe_record_function('VAE_rec'):
             with self.vae_opt.amp_ctx:
                 self.vae_wo_ddp.forward
-                rec_B3HW, usage, Lq,  = self.vae(inp, ret_usages=loggable)
-                if loggable:
-                    self.usage_max  = max(self.usage_max, max(usage))
+                rec_B3HW, usage, Lkl = self.vae(inp, ret_usages=loggable)
+                # usage is None for continuous VAE, but kept for compatibility
+                if loggable and usage is not None:
+                    self.usage_max = max(self.usage_max, max(usage))
                 Le = 0.0
                 B = rec_B3HW.shape[0]
                 inp_rec_no_grad = torch.cat((inp, rec_B3HW.data), dim=0)
+                
+                # Debug: print KL loss info for first few iterations
+                if not hasattr(self, '_debug_kl_printed') or self._debug_kl_printed < 3:
+                    if not hasattr(self, '_debug_kl_printed'):
+                        self._debug_kl_printed = 0
+                    Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
+                    print(f'[Trainer Debug] [Ep {ep}] [It {it}] Lkl={Lkl_item:.6f} (raw value from quantizer)')
+                    self._debug_kl_printed += 1
             
+            # Reconstruction loss (L1 + optional L2)
             Lrec = F.l1_loss(rec_B3HW, inp)
             Lrec_for_log = Lrec.data.clone()
             Lrec *= self.wei_l1
@@ -180,11 +241,36 @@ class VAETrainer(object):
                             w = self.ema_gada
                     wei_g = wei_g * w
                 
-                Lv = Lnll + Lq + self.wei_entropy * Le + wei_g * Lg
+                Lv = Lnll + Lkl + self.wei_entropy * Le + wei_g * Lg
+                
+                # Debug: print loss components for first few iterations
+                if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
+                    if not hasattr(self, '_debug_loss_printed'):
+                        self._debug_loss_printed = 0
+                    Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
+                    Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
+                    Lg_item = Lg.item() if isinstance(Lg, torch.Tensor) else Lg
+                    Lv_item = Lv.item() if isinstance(Lv, torch.Tensor) else Lv
+                    print(f'[Trainer Debug] [Ep {ep}] [It {it}] Loss components: '
+                          f'Lnll={Lnll_item:.6f}, Lkl={Lkl_item:.6f}, Lg={Lg_item:.6f}, '
+                          f'Lv={Lv_item:.6f}, ratio_kl/Lnll={Lkl_item/(Lnll_item+1e-8):.3f}')
+                    self._debug_loss_printed += 1
         else:
-            Lv = Lnll + Lq + self.wei_entropy * Le
+            Lv = Lnll + Lkl + self.wei_entropy * Le
             Lg = torch.tensor(0.)
             wei_g = None
+            
+            # Debug: print loss components for first few iterations (no discriminator)
+            if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
+                if not hasattr(self, '_debug_loss_printed'):
+                    self._debug_loss_printed = 0
+                Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
+                Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
+                Lv_item = Lv.item() if isinstance(Lv, torch.Tensor) else Lv
+                print(f'[Trainer Debug] [Ep {ep}] [It {it}] Loss components (no disc): '
+                      f'Lnll={Lnll_item:.6f}, Lkl={Lkl_item:.6f}, '
+                      f'Lv={Lv_item:.6f}, ratio_kl/Lnll={Lkl_item/(Lnll_item+1e-8):.3f}')
+                self._debug_loss_printed += 1
         
         # todo: G D backward together;   less calling .item()
         # todo: G D backward together;   less calling .item()
@@ -265,23 +351,38 @@ class VAETrainer(object):
             if it == 0 or it in metric_lg.log_iters:
                 Lpip = Lpip.item()
                 Lnll = Lrec_for_log + Lpip
-                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d, usage=self.usage_max )
+                Lkl_for_log = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
+                metric_lg.update(L1=Lrec_for_log, NLL=Lnll, Lkl=Lkl_for_log, Ld=Ld, Wg=wei_g, acc_real=acc_real, acc_fake=acc_fake, gnm=grad_norm_g, dnm=grad_norm_d, usage=self.usage_max )
+                
+                # Save reconstruction comparison images (only on master process)
+                if (args.save_reconstruction_images 
+                    and dist.is_master()):
+                    try:
+                        save_dir = os.path.join(args.local_out_dir_path, 'reconstruction_samples')
+                        saved_path = save_reconstruction_comparison(
+                            original=inp,
+                            reconstructed=rec_B3HW.detach(),
+                            save_dir=save_dir,
+                            ep=ep,
+                            it=it,
+                            max_samples=4,
+                        )
+                        # Optionally print save confirmation (can be commented out to reduce log clutter)
+                        # print(f'[Image saved] {saved_path}', flush=True)
+                    except Exception as e:
+                        # Don't crash training if image saving fails
+                        print(f'[Warning] Failed to save reconstruction images: {e}', flush=True)
             
             # [tensorboard logging]
             if loggable:
-                Lbcr, Lq, Le, Lg = Lbcr.item(), Lq.item(), Le if isinstance(Le, (int, float)) else Le.item(), Lg.item()
+                Lbcr, Lkl, Le, Lg = Lbcr.item(), Lkl.item(), Le if isinstance(Le, (int, float)) else Le.item(), Lg.item()
                 
-                # vae_vocab_size = self.vae_wo_ddp.vocab_size
-                # prob_per_class_is_chosen = idx_N.bincount()
-                # prob_per_class_is_chosen = F.pad(prob_per_class_is_chosen, pad=(0, vae_vocab_size-prob_per_class_is_chosen.shape[0]), mode='constant', value=0).float() / prob_per_class_is_chosen.sum()
-                # log_perplexity = (-(prob_per_class_is_chosen * torch.log(prob_per_class_is_chosen + 1e-10)).sum())
-                # cluster_usage = (prob_per_class_is_chosen > 0.05 / vae_vocab_size).float().mean() * 100
                 kw = dict(
-                    # total=Lnll + Lq + self.wei_disc * Lg,
-                    Nll=Lnll, RecL1=Lrec_for_log, quant=Lq,
-                    # z_log_perplex=log_perplexity, z_voc_usage=cluster_usage
+                    Nll=Lnll, RecL1=Lrec_for_log, kl_loss=Lkl,
                 )
-                kw[f'z_voc_usage'] = usage
+                # usage is None for continuous VAE
+                if usage is not None:
+                    kw[f'z_voc_usage'] = usage
                 if Le > 1e-6: kw['entropy'] = Le
                 if Lpip > 1e-6: kw['Lpip'] = Lpip
                 tb_lg.update(head='PT_iter_V_loss', step=g_it, **kw)
@@ -318,14 +419,7 @@ class VAETrainer(object):
                 p_ema.data.mul_(ema_ratio).add_(p.data, alpha=1-ema_ratio)
         for p_ema, p in zip(self.vae_ema.buffers(), self.vae_wo_ddp.buffers()):
             p_ema.data.copy_(p.data)
-        quant, quant_ema = self.vae_wo_ddp.quantize, self.vae_ema.quantize
-        quant: VectorQuantizer2
-        if hasattr(quant, 'using_ema') and quant.using_ema: # then embedding.weight requires no grad, thus is not in self.vae_ema_params; so need to update it manually
-            if hasattr(quant, 'using_restart') and quant.using_restart:
-                # cannot use ema, cuz quantize.embedding uses replacement (rand restart)
-                quant_ema.embedding.weight.data.copy_(quant.embedding.weight.data)
-            else:
-                quant_ema.embedding.weight.data.mul_(ema_ratio).add_(quant.embedding.weight.data, alpha=1-ema_ratio)
+        # No embedding weight in continuous VAE, so no special handling needed
     
     def get_config(self):
         return {

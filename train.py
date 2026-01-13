@@ -232,32 +232,73 @@ def build_things_from_args(args: arg_util.Args):
     )]) + '\n\n')
     
     if args.vocab_width == 32 and len(args.patch_nums)==10:
-        vae_ckpt = "/mnt/d/DATA/ckpt/vae_ch160v4096z32.pth"
+        vae_ckpt = "vae_ch160v4096z32.pth"
         checkpoint = torch.load(vae_ckpt, map_location='cpu')
-        # 下面代码是为了将4096的vocab_size和embedding.weight复制到新的模型中 
+        # 从旧的VQ-VAE checkpoint加载权重到新的Continuous VAE模型
+        # 注意：Continuous VAE不再使用embedding和ema_vocab_hit_SV，这些参数会被忽略
         # 不建议加入git中
+        
+        # ========== 打印checkpoint结构 ==========
+        print(f"\n{'='*60}")
+        print(f"[Checkpoint Structure Analysis]")
+        print(f"{'='*60}")
+        print(f"Top-level keys in checkpoint: {list(checkpoint.keys())}")
+        
         if "trainer" in checkpoint.keys():
-            checkpoint = checkpoint['trainer']
-            checkpoint = checkpoint['vae_ema']
-        
-        with torch.no_grad():
-            # 初始化 ema_vocab_hit_SV 参数
-            torch.nn.init.zeros_(vae_wo_ddp.quantize.ema_vocab_hit_SV)
-            # 初始化 embedding.weight 参数
-            torch.nn.init.normal_(vae_wo_ddp.quantize.embedding.weight, mean=0.0, std=0.02)
-        
-            for i in range(min(checkpoint['quantize.ema_vocab_hit_SV'].shape[1],args.vocab_size)):
-                vae_wo_ddp.quantize.ema_vocab_hit_SV[:,i] = checkpoint['quantize.ema_vocab_hit_SV'][:,i]
-                vae_wo_ddp.quantize.embedding.weight[i,:] = checkpoint['quantize.embedding.weight'][i,:]
-        
-        if 'quantize.ema_vocab_hit_SV' in checkpoint:
-            del checkpoint['quantize.ema_vocab_hit_SV']
-        if 'quantize.embedding.weight' in checkpoint:
-            del checkpoint['quantize.embedding.weight']
+            print(f"\n[Trainer State]")
+            trainer_state = checkpoint['trainer']
+            print(f"  Trainer keys: {list(trainer_state.keys())}")
             
+            # 打印trainer中每个子模块的键（只显示前几个）
+            for key in trainer_state.keys():
+                if isinstance(trainer_state[key], dict):
+                    sub_keys = list(trainer_state[key].keys())
+                    print(f"  - {key}: dict with {len(sub_keys)} keys")
+                    if len(sub_keys) > 0:
+                        print(f"    First 10 keys: {sub_keys[:10]}")
+                else:
+                    print(f"  - {key}: {type(trainer_state[key])}")
+            
+            # 提取trainer字典，然后提取EMA版本的VAE参数（更稳定）
+            checkpoint = trainer_state['vae_ema']  # 使用EMA版本而非vae_wo_ddp
+            print(f"\n[Extracted VAE EMA State]")
+            print(f"  Total parameters: {len(checkpoint.keys())}")
+            print(f"  First 20 parameter keys:")
+            for i, key in enumerate(list(checkpoint.keys())[:20]):
+                param_shape = checkpoint[key].shape if hasattr(checkpoint[key], 'shape') else 'N/A'
+                print(f"    {i+1:2d}. {key:50s} shape: {param_shape}")
+            if len(checkpoint.keys()) > 20:
+                print(f"    ... and {len(checkpoint.keys()) - 20} more parameters")
+        else:
+            print(f"\n[Direct Model State]")
+            print(f"  Total parameters: {len(checkpoint.keys())}")
+            print(f"  First 20 parameter keys:")
+            for i, key in enumerate(list(checkpoint.keys())[:20]):
+                param_shape = checkpoint[key].shape if hasattr(checkpoint[key], 'shape') else 'N/A'
+                print(f"    {i+1:2d}. {key:50s} shape: {param_shape}")
+            if len(checkpoint.keys()) > 20:
+                print(f"    ... and {len(checkpoint.keys()) - 20} more parameters")
         
+        print(f"{'='*60}\n")
+        # ========== 打印结束 ==========
+        
+        # 移除Continuous VAE不需要的旧VQ-VAE参数
+        legacy_keys = [
+            'quantize.ema_vocab_hit_SV', 
+            'quantize.embedding.weight',
+            'quantize.vocab_size',
+            'quantize.V',
+        ]
+        for key in legacy_keys:
+            if key in checkpoint:
+                del checkpoint[key]
+        
+        # 只加载encoder、decoder、quant_conv、post_quant_conv等共享部分的权重
+        # quantize层的mean_logvar_conv需要重新初始化（因为旧模型没有这个）
         vae_wo_ddp.load_state_dict(checkpoint, strict=False)
-        print("loaded vae ckpt from", vae_ckpt) 
+        # 重新初始化mean_logvar_conv（因为旧VQ-VAE没有这个层）
+        vae_wo_ddp.quantize._init_mean_logvar_conv()
+        print("loaded vae ckpt from", vae_ckpt, "(legacy VQ-VAE params ignored, mean_logvar_conv re-initialized)") 
     
     # build optimizers
     optimizers: List[AmpOptimizer] = []
@@ -327,7 +368,7 @@ def build_things_from_args(args: arg_util.Args):
 
 
 g_speed_ls = deque(maxlen=128)
-def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, args: arg_util.Args, tb_lg: misc.TensorboardLogger, ld_or_itrt, iters_train: int, trainer, logging_params_milestone):
+def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, args: arg_util.Args, tb_lg: misc.TensorboardLogger, ld_or_itrt, iters_train: int, trainer, logging_params_milestone, ld_val=None):
     # import heavy packages after Dataloader object creation
     from trainer import VAETrainer
     from utils.lr_control import lr_wd_annealing
@@ -340,6 +381,7 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
     for l in ['L1', 'NLL', 'Ld', 'Wg']:
         me.add_meter(l, misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
     me.add_meter("usage",misc.SmoothedValue(fmt='{median:.2f} ({global_avg:.2f})'))
+    me.add_meter("Lkl", misc.SmoothedValue(fmt='{median:.2e} ({global_avg:.2e})'))  # KL loss with scientific notation
     header = f'[Ep]: [{ep:4d}/{args.ep}]'
     
     touching_secs = 120
@@ -481,6 +523,14 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, saver: CKPTSaver, ar
                 d_ratio = 1 if grad_norm_d is None else min(1.0, args.grad_clip / (grad_norm_d + 1e-7))
                 tb_lg.update(head='PT_opt_lr/lr_max', actu_glr=g_ratio*max_glr, actu_dlr=d_ratio*max_dlr)
                 tb_lg.update(head='PT_opt_lr/lr_min', actu_glr=g_ratio*min_glr, actu_dlr=d_ratio*min_dlr)
+            
+            # Quick validation during training (using limited batches for speed)
+            if ld_val is not None and it in me.log_iters:
+                # Use 10 batches for quick validation to avoid slowing down training too much
+                val_L_rec_mean, val_psnr_mean, val_ssim_mean = trainer.eval_ep(ld_val, max_batches=10)
+                print(f' [*] [ep{ep}] [it{it}]  val_L_rec_mean: {val_L_rec_mean:.4f}, PSNR: {val_psnr_mean:.4f}, SSIM: {val_ssim_mean:.4f} (quick val, 10 batches)')
+                if tb_lg.loggable():
+                    tb_lg.update(head='PT_iter_val', val_L1=val_L_rec_mean, val_PSNR=val_psnr_mean, val_SSIM=val_ssim_mean, step=g_it)
     
     me.synchronize_between_processes()
     return {k: meter.global_avg for k, meter in me.meters.items()}, me.iter_time.time_preds(max_it - (g_it + 1) + (args.ep - ep) * 15)  # +15: other cost
@@ -538,7 +588,7 @@ def main_training():
             sdp_kernel_select_ctx = nullcontext()
         with sdp_kernel_select_ctx:
             stats, (sec, remain_time, finish_time) = train_one_ep(
-                ep, ep == start_ep, start_it if ep == start_ep else 0, saver, args, tb_lg, ld_train, iters_train, trainer, logging_params_milestone
+                ep, ep == start_ep, start_it if ep == start_ep else 0, saver, args, tb_lg, ld_train, iters_train, trainer, logging_params_milestone, ld_val=ld_val
             )
         
         Lnll, L1, Ld, wei_g = stats['NLL'], stats['L1'], stats['Ld'], stats['Wg']
@@ -584,8 +634,8 @@ def main_training():
         is_val_and_also_saving = (ep + 1) % args.val_and_saving_per_ep == 0 or (ep + 1) == args.ep
         if is_val_and_also_saving:
             
-            val_L_rec_mean = trainer.eval_ep(ld_val)
-            print(f' [*] [ep{ep}]  val_L_rec_mean: {val_L_rec_mean:.4f}')
+            val_L_rec_mean, val_psnr_mean, val_ssim_mean = trainer.eval_ep(ld_val)
+            print(f' [*] [ep{ep}]  val_L_rec_mean: {val_L_rec_mean:.4f}, PSNR: {val_psnr_mean:.4f}, SSIM: {val_ssim_mean:.4f}')
 
             if dist.is_local_master():
                 local_out_ckpt = os.path.join(args.local_out_dir_path, 'ckpt-last.pth')
