@@ -63,6 +63,18 @@ class Args(Tap):
     share_quant_resi: int = 4
     patch_nums: tuple = (5, 6, 8, 10, 13, 16) 
     
+    # LR VAE: single-scale VAE for low-resolution images (output 5x5)
+    lr_ch: int = 128                # LR VAE channel count
+    lr_vocab_width: int = 32        # LR VAE latent channels
+    lr_vq_beta: float = 1.0         # LR VAE KL loss weight (simple, no compression)
+    lr_img_size: int = 80           # LR image size (80x80 -> 5x5 after 16x downsample)
+    
+    # Two-stage training control
+    training_stage: int = 1         # 1: train LR VAE only; 2: train HR VAE with alignment
+    use_lr_hr_alignment: bool = False  # whether to use LR-HR alignment loss in stage 2
+    alignment_loss_weight: float = 1.0  # weight for LR-HR 5x5 alignment loss
+    lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
+    
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers
     dino_kernel_size: int = 9   # 9 is stylegan-T's setting

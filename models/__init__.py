@@ -5,11 +5,12 @@ import torch.nn as nn
 from utils.arg_util import Args
 from .quant import ContinuousMultiScaleQuantizer
 from .vqvae import VQVAE
+from .lr_vae import LR_VAE
 from .dino import DinoDisc
 from .basic_vae import Encoder
 
 
-def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
+def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
     # disable built-in initialization for speed
     for clz in (
         nn.Linear, nn.Embedding,
@@ -19,12 +20,19 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         setattr(clz, 'reset_parameters', lambda self: None)
     
     # build models
+    # HR multi-scale VAE
     vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, test_mode=False, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums, debug_kl_count_limit=args.debug_kl_count_limit).to(args.device)
+    
+    # LR single-scale VAE (output 5x5)
+    lr_vae = LR_VAE(z_channels=args.lr_vocab_width, ch=args.lr_ch, dropout=args.drop_out, beta=args.lr_vq_beta, test_mode=False).to(args.device)
+    
+    # Discriminator
     disc = DinoDisc(
         device=args.device, depth=args.dino_depth, key_depths=(2, 5, 8, 11),
         ks=args.dino_kernel_size, norm_type=args.disc_norm, using_spec_norm=args.disc_spec_norm, norm_eps=1e-6,
     ).to(args.device)
-    # init weights
+    
+    # init weights for HR VAE
     need_init = [
         vae.quant_conv,
         vae.quantize,
@@ -35,9 +43,23 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         need_init.insert(0, vae.encoder)
     for vv in need_init:
         init_weights(vv, args.vae_init)
+    
+    # init weights for LR VAE
+    lr_need_init = [
+        lr_vae.encoder,
+        lr_vae.quant_conv,
+        lr_vae.mean_logvar_conv,
+        lr_vae.post_quant_conv,
+        lr_vae.decoder,
+    ]
+    for vv in lr_need_init:
+        init_weights(vv, args.vae_init)
+    
+    # init discriminator
     init_weights(disc, args.disc_init)
+    
     # No embedding initialization needed for continuous VAE
-    return vae, disc
+    return vae, disc, lr_vae
 
 
 def init_weights(model, conv_std_or_gain):
