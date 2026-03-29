@@ -99,6 +99,27 @@ class LR_VAE(nn.Module):
         rec_B3HW = self.decoder(self.post_quant_conv(f_5x5))
         
         return rec_B3HW, f_5x5, kl_loss
+
+    def encode_to_posterior_stats(self, inp: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode LR image and return posterior mean/logvar at the latent scale.
+
+        Returns:
+            mean: [B, C, h, w]
+            logvar: [B, C, h, w]
+        """
+        f_encoded = self.quant_conv(self.encoder(inp))
+        moments = self.mean_logvar_conv(f_encoded)
+        posterior = DiagonalGaussianDistribution(moments, deterministic=not self.training)
+        return posterior.mean, posterior.logvar
+
+    def encode_to_posterior_mean(self, inp: torch.Tensor) -> torch.Tensor:
+        """
+        Encode LR image and return posterior mean.
+        This is the recommended representation for cross-model alignment.
+        """
+        mean, _ = self.encode_to_posterior_stats(inp)
+        return mean
     
     def encode_to_5x5(self, inp: torch.Tensor) -> torch.Tensor:
         """
@@ -111,12 +132,7 @@ class LR_VAE(nn.Module):
             f_5x5: latent features [B, C, 5, 5]
         """
         with torch.no_grad():
-            f_encoded = self.encoder(inp)
-            f_encoded = self.quant_conv(f_encoded)
-            moments = self.mean_logvar_conv(f_encoded)
-            posterior = DiagonalGaussianDistribution(moments, deterministic=True)
-            f_5x5 = posterior.mode()  # use mean for deterministic encoding
-        return f_5x5
+            return self.encode_to_posterior_mean(inp)
     
     def decode_from_5x5(self, f_5x5: torch.Tensor) -> torch.Tensor:
         """

@@ -73,6 +73,7 @@ class Args(Tap):
     training_stage: int = 1         # 1: train LR VAE only; 2: train HR VAE with alignment
     use_lr_hr_alignment: bool = False  # whether to use LR-HR alignment loss in stage 2
     alignment_loss_weight: float = 1.0  # weight for LR-HR 5x5 alignment loss
+    lr_vae_resume: str = ''         # stage-2 warm start: load only LR VAE weights from a stage-1 checkpoint
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
     
     # DINO discriminator

@@ -10,7 +10,7 @@ from .dino import DinoDisc
 from .basic_vae import Encoder
 
 
-def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
+def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
     # disable built-in initialization for speed
     for clz in (
         nn.Linear, nn.Embedding,
@@ -20,13 +20,7 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
         setattr(clz, 'reset_parameters', lambda self: None)
     
     # build models
-    # HR multi-scale VAE
     vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, test_mode=False, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums, debug_kl_count_limit=args.debug_kl_count_limit).to(args.device)
-    
-    # LR single-scale VAE (output 5x5)
-    lr_vae = LR_VAE(z_channels=args.lr_vocab_width, ch=args.lr_ch, dropout=args.drop_out, beta=args.lr_vq_beta, test_mode=False).to(args.device)
-    
-    # Discriminator
     disc = DinoDisc(
         device=args.device, depth=args.dino_depth, key_depths=(2, 5, 8, 11),
         ks=args.dino_kernel_size, norm_type=args.disc_norm, using_spec_norm=args.disc_spec_norm, norm_eps=1e-6,
@@ -43,8 +37,20 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
         need_init.insert(0, vae.encoder)
     for vv in need_init:
         init_weights(vv, args.vae_init)
-    
-    # init weights for LR VAE
+    init_weights(disc, args.disc_init)
+    return vae, disc
+
+
+def build_two_stage_models(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
+    vae, disc = build_vae_disc(args)
+    lr_vae = LR_VAE(
+        z_channels=args.lr_vocab_width,
+        ch=args.lr_ch,
+        dropout=args.drop_out,
+        beta=args.lr_vq_beta,
+        test_mode=False,
+    ).to(args.device)
+
     lr_need_init = [
         lr_vae.encoder,
         lr_vae.quant_conv,
@@ -54,11 +60,7 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
     ]
     for vv in lr_need_init:
         init_weights(vv, args.vae_init)
-    
-    # init discriminator
-    init_weights(disc, args.disc_init)
-    
-    # No embedding initialization needed for continuous VAE
+
     return vae, disc, lr_vae
 
 

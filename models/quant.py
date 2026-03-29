@@ -101,6 +101,31 @@ class ContinuousMultiScaleQuantizer(nn.Module):
     
     def extra_repr(self) -> str:
         return f'{self.v_patch_nums}, kl_weight={self.kl_weight}  |  S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
+
+    def get_scale_posterior_stats(self, f_BChw: torch.Tensor, scale_index: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return posterior mean/logvar for a specific scale token before quant_resi.
+
+        Args:
+            f_BChw: encoder feature map after quant_conv, shape [B, C, H, W]
+            scale_index: index into self.v_patch_nums
+
+        Returns:
+            mean: [B, C, pn, pn]
+            logvar: [B, C, pn, pn]
+        """
+        if not (0 <= scale_index < len(self.v_patch_nums)):
+            raise IndexError(f'{scale_index=} out of range for {self.v_patch_nums=}')
+
+        pn = self.v_patch_nums[scale_index]
+        if scale_index != len(self.v_patch_nums) - 1:
+            scale_feature = F.interpolate(f_BChw, size=(pn, pn), mode='area')
+        else:
+            scale_feature = f_BChw
+
+        moments = self.mean_logvar_conv(scale_feature)
+        posterior = DiagonalGaussianDistribution(moments, deterministic=not self.training)
+        return posterior.mean, posterior.logvar
     
     # ===================== `forward` is only used in VAE training =====================
     def forward(self, f_BChw: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, List[float], torch.Tensor]:

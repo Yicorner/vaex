@@ -90,6 +90,17 @@ class VQVAE(nn.Module):
         """Convert image to multi-scale latent representations (continuous VAE)."""
         f = self.quant_conv(self.encoder(inp_img_no_grad))
         return self.quantize.f_to_fhat_multiscale(f, v_patch_nums=v_patch_nums)
+
+    def img_to_scale_posterior_stats(self, x: torch.Tensor, scale_index: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return posterior mean/logvar for a specific scale token before quant_resi.
+        """
+        f = self.quant_conv(self.encoder(x))
+        return self.quantize.get_scale_posterior_stats(f, scale_index=scale_index)
+
+    def img_to_first_scale_posterior_mean(self, x: torch.Tensor) -> torch.Tensor:
+        mean, _ = self.img_to_scale_posterior_stats(x, scale_index=0)
+        return mean
     
     def embed_to_img(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale: bool, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
         if last_one:
