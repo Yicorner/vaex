@@ -1,5 +1,5 @@
 ---
-description: 在完成深入任务后，引导 Agent 反思并酌情更新 Skill；或在任务中发现 skill 缺陷时直接更新。强调「任务完成后的反思 → 示例/约束补充」的循环，持续丰富 skill，便于后续深度思考。
+description: 在完成任务后，引导 Agent 反思并酌情更新 Skill；或在任务中发现 skill 缺陷时直接更新。强调「任务完成后的反思 → 示例/约束补充」的循环，持续丰富 skill，便于后续深度思考。
 alwaysApply: true
 ---
 

@@ -157,8 +157,8 @@ class TwoStageVAETrainer(object):
                 ema_param.data.mul_(self.ema_ratio).add_(param.data, alpha=1 - self.ema_ratio)
 
     def _disc_forward(self, real_img: torch.Tensor, fake_img: torch.Tensor, fade_blur_schedule: float):
-        real_aug = self.daug(real_img, fade_blur_schedule=fade_blur_schedule)
-        fake_aug = self.daug(fake_img, fade_blur_schedule=fade_blur_schedule)
+        real_aug = self.daug.aug(real_img, fade_blur_schedule)
+        fake_aug = self.daug.aug(fake_img, fade_blur_schedule)
         return self.disc(torch.cat((real_aug, fake_aug), dim=0)).split([real_img.shape[0], fake_img.shape[0]], dim=0)
 
     def _get_alignment_targets(self, inp_lr: torch.Tensor, inp_hr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

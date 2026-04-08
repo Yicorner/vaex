@@ -2,9 +2,42 @@ import torch
 from torch.nn import functional as F
 
 # usage: like tot_loss = hinge_loss(logits_real) + hinge_loss(-logits_fake)
-def hinge_loss(logits: torch.Tensor): return (1 - logits).relu().mean()
-def softplus_loss(logits: torch.Tensor): return F.softplus(-logits).mean()
-def linear_loss(logits: torch.Tensor): return (-logits).mean()
+def hinge_loss(
+    logits: torch.Tensor,
+    is_real_pred: bool = None,
+    for_g: bool = False,
+):
+    if is_real_pred is None:
+        return (1 - logits).relu().mean()
+    if for_g:
+        return (-logits).mean()
+    signed_logits = logits if is_real_pred else -logits
+    return (1 - signed_logits).relu().mean()
+
+
+def softplus_loss(
+    logits: torch.Tensor,
+    is_real_pred: bool = None,
+    for_g: bool = False,
+):
+    if is_real_pred is None:
+        return F.softplus(-logits).mean()
+    if for_g:
+        return F.softplus(-logits).mean()
+    signed_logits = logits if is_real_pred else -logits
+    return F.softplus(-signed_logits).mean()
+
+
+def linear_loss(
+    logits: torch.Tensor,
+    is_real_pred: bool = None,
+    for_g: bool = False,
+):
+    if is_real_pred is None:
+        return (-logits).mean()
+    if for_g:
+        return (-logits).mean()
+    return (-logits if is_real_pred else logits).mean()
 
 
 def focal_l1_loss(
