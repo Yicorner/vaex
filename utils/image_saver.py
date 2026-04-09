@@ -4,8 +4,9 @@ Image saving utility for VAE training visualization.
 This module provides functions to save original and reconstructed images
 during training for monitoring VAE reconstruction quality.
 """
+import json
 import os
-from typing import Tuple, List
+from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torchvision
 from PIL import Image
@@ -110,6 +111,43 @@ def save_reconstruction_comparison(
     grid_pil.save(filepath)
     
     return filepath
+
+
+def save_reconstruction_run_metadata(
+    save_dir: str,
+    args_state: Dict[str, Any],
+    stage_name: str,
+    frequency_description: str,
+    max_samples: int,
+    filename_pattern: str = "ep{epoch:04d}_it{iter:06d}_comparison.png",
+) -> str:
+    """
+    Save a lightweight manifest next to reconstruction images.
+
+    The manifest makes it easy to trace which training command and arguments
+    produced the current reconstruction folder without reopening checkpoints.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    metadata_path = os.path.join(save_dir, "run_metadata.json")
+    payload = {
+        "stage_name": stage_name,
+        "save_dir": save_dir,
+        "filename_pattern": filename_pattern,
+        "frequency_description": frequency_description,
+        "comparison_layout": "2 columns per row: original | reconstructed",
+        "max_samples_per_image": int(max_samples),
+        "postprocess": [
+            "denormalize tensors from [-1, 1] to [0, 1]",
+            "clamp values to [0, 1]",
+            "stack original and reconstruction pairs into a grid",
+            "add white padding between tiles",
+            "convert to uint8 PNG without extra filtering",
+        ],
+        "args": args_state,
+    }
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=True, sort_keys=True, default=str)
+    return metadata_path
 
 
 def save_individual_images(

@@ -84,7 +84,15 @@ L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
 2. 阶段 2 不是普通的 HR 重建训练，而是“HR 多尺度训练 + 5x5 latent 对齐”。
 3. `lr_f_5x5` 是阶段 2 的监督目标之一，不能在训练过程中被误更新。
 4. `disc_opt`、`lr_vae_opt`、`vae_opt` 的职责边界明确，不应混用参数组。
-5. 如果修改 encoder 下采样倍率，必须同步检查：
+5. 判别器更新和生成器对抗损失不能共用同一份 `detached` fake logits：
+   - `Ld` 可以使用 `rec.detach()`
+   - `Lg_adv` 必须重新对未 `detach` 的重建结果做一次判别器前向
+   - 否则 `Lg_adv` 不会回传到 VAE/LR_VAE，`_compute_adaptive_weight()` 会在最后一层权重上报 `Tensor appears to not have been used in the graph`
+6. 当 `warmup_disc_schedule == 0`（例如 `disc_start_ep` 之前）时，必须**完全跳过** GAN 分支（`disc forward`、`Lg_adv`、`wei_g`、`Ld backward`）：
+   - 不能只写 `Lg += wei_g * Lg_adv * 0`
+   - 因为 `NaN * 0` 仍是 `NaN`，会把生成器 loss 污染为 `NaN`
+   - 这条约束同时适用于 stage 1 和 stage 2
+7. 如果修改 encoder 下采样倍率，必须同步检查：
    - `patch_nums`
    - `lr_img_size`
    - HR/LR 对齐分辨率

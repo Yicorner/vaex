@@ -10,6 +10,8 @@ Stage 2:
 - align the first HR scale token with LR posterior mean
 """
 import os
+import math
+import math
 from copy import deepcopy
 from typing import Callable, Optional, Tuple, Union
 
@@ -24,7 +26,7 @@ from models import DinoDisc, LR_VAE, VQVAE
 from utils import arg_util, misc
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
-from utils.image_saver import save_reconstruction_comparison
+from utils.image_saver import save_reconstruction_comparison, save_reconstruction_run_metadata
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
 
@@ -91,6 +93,7 @@ class TwoStageVAETrainer(object):
         self.lr_vae_wo_ddp: LR_VAE = lr_vae_wo_ddp
         self.disc = disc
         self.disc_wo_ddp: DinoDisc = disc_wo_ddp
+        self.disc_params: Tuple[nn.Parameter, ...] = tuple(self.disc_wo_ddp.parameters())
 
         self.vae_opt = vae_opt
         self.lr_vae_opt = lr_vae_opt
@@ -135,8 +138,93 @@ class TwoStageVAETrainer(object):
 
         self.usage_max = 0.0
         self._debug_loss_printed = 0
+        self._reconstruction_metadata_written_dirs = set()
 
         self.set_training_stage(training_stage)
+
+    def _get_reconstruction_save_dir(self, args: arg_util.Args) -> str:
+        default_dir_name = 'reconstruction_samples_lr' if self.training_stage == 1 else 'reconstruction_samples_hr'
+        dir_name = args.reconstruction_dir_name.strip() or default_dir_name
+        return os.path.join(args.local_out_dir_path, dir_name)
+
+    def _should_save_reconstruction(self, it: int, metric_lg: misc.MetricLogger, args: arg_util.Args) -> bool:
+        interval = max(int(getattr(args, 'reconstruction_save_interval', 0)), 0)
+        if interval > 0:
+            return it % interval == 0
+        return it == 0 or it in metric_lg.log_iters
+
+    def _record_reconstruction_metadata(self, save_dir: str, args: arg_util.Args) -> None:
+        if not getattr(args, 'record_reconstruction_metadata', True):
+            return
+        if save_dir in self._reconstruction_metadata_written_dirs:
+            return
+
+        interval = max(int(getattr(args, 'reconstruction_save_interval', 0)), 0)
+        if interval > 0:
+            frequency_description = f'save one comparison image every {interval} training iterations'
+        else:
+            frequency_description = 'save on legacy log iterations (evenly spaced log points within each epoch, plus iteration 0)'
+
+        stage_name = 'stage1_lr_vae' if self.training_stage == 1 else 'stage2_hr_vae'
+        save_reconstruction_run_metadata(
+            save_dir=save_dir,
+            args_state=args.state_dict(key_ordered=False),
+            stage_name=stage_name,
+            frequency_description=frequency_description,
+            max_samples=getattr(args, 'reconstruction_max_samples', 4),
+        )
+        self._reconstruction_metadata_written_dirs.add(save_dir)
+
+    def _assert_finite(self, name: str, value, ep: int, it: int, stage: str) -> None:
+        """Fail fast on NaN/Inf when dbg_nan is enabled."""
+        if not self.dbg_nan:
+            return
+
+        if torch.is_tensor(value):
+            tensor = value.detach()
+            if torch.isfinite(tensor).all():
+                return
+            nan_count = torch.isnan(tensor).sum().item()
+            posinf_count = torch.isposinf(tensor).sum().item()
+            neginf_count = torch.isneginf(tensor).sum().item()
+            total = tensor.numel()
+            raise RuntimeError(
+                f'[NaN Debug][{stage}] [ep{ep}] [it{it}] `{name}` is non-finite: '
+                f'nan={nan_count}, +inf={posinf_count}, -inf={neginf_count}, total={total}'
+            )
+
+        scalar = float(value)
+        if math.isfinite(scalar):
+            return
+        raise RuntimeError(
+            f'[NaN Debug][{stage}] [ep{ep}] [it{it}] `{name}` is non-finite: {scalar}'
+        )
+
+    def _assert_finite(self, name: str, value, ep: int, it: int, stage: str) -> None:
+        """Fail fast on NaN/Inf when dbg_nan is enabled."""
+        if not self.dbg_nan:
+            return
+
+        if torch.is_tensor(value):
+            tensor = value.detach()
+            finite_mask = torch.isfinite(tensor)
+            if finite_mask.all():
+                return
+            nan_count = torch.isnan(tensor).sum().item()
+            posinf_count = torch.isposinf(tensor).sum().item()
+            neginf_count = torch.isneginf(tensor).sum().item()
+            total = tensor.numel()
+            raise RuntimeError(
+                f'[NaN Debug][{stage}] [ep{ep}] [it{it}] `{name}` is non-finite: '
+                f'nan={nan_count}, +inf={posinf_count}, -inf={neginf_count}, total={total}'
+            )
+
+        scalar = float(value)
+        if math.isfinite(scalar):
+            return
+        raise RuntimeError(
+            f'[NaN Debug][{stage}] [ep{ep}] [it{it}] `{name}` is non-finite: {scalar}'
+        )
 
     def _compute_adaptive_weight(self, nll_loss: torch.Tensor, g_loss: torch.Tensor, last_layer_weight: torch.Tensor) -> torch.Tensor:
         nll_grads = torch.autograd.grad(nll_loss, last_layer_weight, retain_graph=True)[0]
@@ -160,6 +248,23 @@ class TwoStageVAETrainer(object):
         real_aug = self.daug.aug(real_img, fade_blur_schedule)
         fake_aug = self.daug.aug(fake_img, fade_blur_schedule)
         return self.disc(torch.cat((real_aug, fake_aug), dim=0)).split([real_img.shape[0], fake_img.shape[0]], dim=0)
+
+    def _generator_adv_loss(self, fake_img: torch.Tensor, fade_blur_schedule: float) -> torch.Tensor:
+        disc_training = self.disc_wo_ddp.training
+        requires_grad_states = tuple(param.requires_grad for param in self.disc_params)
+        try:
+            for param in self.disc_params:
+                param.requires_grad_(False)
+            self.disc_wo_ddp.eval()
+            fake_logits = self.disc_wo_ddp(
+                self.daug.aug(fake_img, fade_blur_schedule),
+                grad_ckpt=self.disc_grad_ckpt,
+            )
+        finally:
+            for param, requires_grad in zip(self.disc_params, requires_grad_states):
+                param.requires_grad_(requires_grad)
+            self.disc_wo_ddp.train(disc_training)
+        return self.d_criterion(is_real_pred=True, logits=fake_logits, for_g=True)
 
     def _get_alignment_targets(self, inp_lr: torch.Tensor, inp_hr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         with torch.no_grad():
@@ -194,10 +299,14 @@ class TwoStageVAETrainer(object):
     ) -> Tuple[Optional[torch.Tensor], Optional[float], Optional[torch.Tensor], Optional[float]]:
         del g_it, regularizing, logging_params
         loggable = tb_lg.loggable() and stepping
+        if warmup_disc_schedule < 1e-6:
+            warmup_disc_schedule = 0.0
 
         with maybe_record_function('LR_VAE_rec'):
             with self.lr_vae_opt.amp_ctx:
                 rec_B3HW, _, Lkl = self.lr_vae(inp_lr)
+                self._assert_finite('rec_B3HW', rec_B3HW, ep, it, 'stage1')
+                self._assert_finite('Lkl', Lkl, ep, it, 'stage1')
                 B = rec_B3HW.shape[0]
                 inp_rec_no_grad = torch.cat((inp_lr, rec_B3HW.detach()), dim=0)
 
@@ -216,26 +325,43 @@ class TwoStageVAETrainer(object):
                     Lnll = Lrec
 
                 Lg = Lnll + Lkl
+                self._assert_finite('Lnll', Lnll, ep, it, 'stage1')
+                self._assert_finite('Lg_pre_adv', Lg, ep, it, 'stage1')
 
-        with maybe_record_function('LR_disc'):
-            with self.disc_opt.amp_ctx:
-                inp_d_logits, rec_d_logits = self._disc_forward(inp_rec_no_grad[:B], inp_rec_no_grad[B:], fade_blur_schedule)
+        if warmup_disc_schedule > 0:
+            with maybe_record_function('LR_disc'):
+                with self.disc_opt.amp_ctx:
+                    inp_d_logits, rec_d_logits = self._disc_forward(inp_rec_no_grad[:B], inp_rec_no_grad[B:], fade_blur_schedule)
+                    self._assert_finite('inp_d_logits', inp_d_logits, ep, it, 'stage1')
+                    self._assert_finite('rec_d_logits', rec_d_logits, ep, it, 'stage1')
 
-        acc_real = (inp_d_logits > 0).float().mean().item()
-        acc_fake = (rec_d_logits < 0).float().mean().item()
-        Ld_real = self.d_criterion(is_real_pred=True, logits=inp_d_logits)
-        Ld_fake = self.d_criterion(is_real_pred=False, logits=rec_d_logits)
-        Ld = Ld_real + Ld_fake
-        Lg_adv = self.d_criterion(is_real_pred=True, logits=rec_d_logits, for_g=True)
+            acc_real = (inp_d_logits > 0).float().mean().item()
+            acc_fake = (rec_d_logits < 0).float().mean().item()
+            Ld_real = self.d_criterion(is_real_pred=True, logits=inp_d_logits)
+            Ld_fake = self.d_criterion(is_real_pred=False, logits=rec_d_logits)
+            Ld = Ld_real + Ld_fake
+            self._assert_finite('Ld', Ld, ep, it, 'stage1')
+            with maybe_record_function('LR_VAE_disc'):
+                with self.disc_opt.amp_ctx:
+                    Lg_adv = self._generator_adv_loss(rec_B3HW, fade_blur_schedule)
+                    self._assert_finite('Lg_adv', Lg_adv, ep, it, 'stage1')
 
-        if self.adapt_wei_disc:
-            wei_g = self._compute_adaptive_weight(Lnll, Lg_adv, self.lr_vae_wo_ddp.decoder.conv_out.weight)
+            if self.adapt_wei_disc:
+                wei_g = self._compute_adaptive_weight(Lnll, Lg_adv, self.lr_vae_wo_ddp.decoder.conv_out.weight)
+            else:
+                wei_g = inp_lr.new_tensor(self.wei_disc)
+            self._assert_finite('wei_g', wei_g, ep, it, 'stage1')
+            Lg = Lg + wei_g * Lg_adv * warmup_disc_schedule
+            self._assert_finite('Lg', Lg, ep, it, 'stage1')
+            grad_norm_d, scale_log2_d = self.disc_opt.backward_clip_step(stepping=stepping, loss=Ld)
         else:
-            wei_g = inp_lr.new_tensor(self.wei_disc)
-        Lg = Lg + wei_g * Lg_adv * warmup_disc_schedule
+            Ld = inp_lr.new_zeros(())
+            wei_g = inp_lr.new_zeros(())
+            acc_real = 0.0
+            acc_fake = 0.0
+            grad_norm_d, scale_log2_d = 0.0, None
 
         grad_norm_g, scale_log2_g = self.lr_vae_opt.backward_clip_step(stepping=stepping, loss=Lg)
-        grad_norm_d, scale_log2_d = self.disc_opt.backward_clip_step(stepping=stepping, loss=Ld)
 
         if self.using_ema and stepping:
             self._ema_update(self.lr_vae_ema, self.lr_vae_wo_ddp)
@@ -253,15 +379,17 @@ class TwoStageVAETrainer(object):
                 dnm=grad_norm_d,
                 usage=0.0,
             )
-            if args.save_reconstruction_images and dist.is_master():
+            if args.save_reconstruction_images and dist.is_master() and self._should_save_reconstruction(it, metric_lg, args):
                 try:
+                    save_dir = self._get_reconstruction_save_dir(args)
+                    self._record_reconstruction_metadata(save_dir, args)
                     save_reconstruction_comparison(
                         original=inp_lr,
                         reconstructed=rec_B3HW.detach(),
-                        save_dir=os.path.join(args.local_out_dir_path, 'reconstruction_samples_lr'),
+                        save_dir=save_dir,
                         ep=ep,
                         it=it,
-                        max_samples=4,
+                        max_samples=args.reconstruction_max_samples,
                     )
                 except Exception as e:
                     print(f'[Warning] Failed to save LR reconstruction images: {e}', flush=True)
@@ -287,10 +415,14 @@ class TwoStageVAETrainer(object):
     ) -> Tuple[Optional[torch.Tensor], Optional[float], Optional[torch.Tensor], Optional[float]]:
         del g_it, regularizing, logging_params
         loggable = tb_lg.loggable() and stepping
+        if warmup_disc_schedule < 1e-6:
+            warmup_disc_schedule = 0.0
 
         with maybe_record_function('HR_VAE_rec'):
             with self.vae_opt.amp_ctx:
                 rec_B3HW, usage, Lkl = self.vae(inp_hr, ret_usages=loggable)
+                self._assert_finite('rec_B3HW', rec_B3HW, ep, it, 'stage2')
+                self._assert_finite('Lkl', Lkl, ep, it, 'stage2')
                 if loggable and usage is not None:
                     self.usage_max = max(self.usage_max, max(usage))
                 B = rec_B3HW.shape[0]
@@ -317,26 +449,44 @@ class TwoStageVAETrainer(object):
                     L_align = inp_hr.new_zeros(())
 
                 Lg = Lnll + Lkl + self.alignment_loss_weight * L_align
+                self._assert_finite('Lnll', Lnll, ep, it, 'stage2')
+                self._assert_finite('L_align', L_align, ep, it, 'stage2')
+                self._assert_finite('Lg_pre_adv', Lg, ep, it, 'stage2')
 
-        with maybe_record_function('HR_disc'):
-            with self.disc_opt.amp_ctx:
-                inp_d_logits, rec_d_logits = self._disc_forward(inp_rec_no_grad[:B], inp_rec_no_grad[B:], fade_blur_schedule)
+        if warmup_disc_schedule > 0:
+            with maybe_record_function('HR_disc'):
+                with self.disc_opt.amp_ctx:
+                    inp_d_logits, rec_d_logits = self._disc_forward(inp_rec_no_grad[:B], inp_rec_no_grad[B:], fade_blur_schedule)
+                    self._assert_finite('inp_d_logits', inp_d_logits, ep, it, 'stage2')
+                    self._assert_finite('rec_d_logits', rec_d_logits, ep, it, 'stage2')
 
-        acc_real = (inp_d_logits > 0).float().mean().item()
-        acc_fake = (rec_d_logits < 0).float().mean().item()
-        Ld_real = self.d_criterion(is_real_pred=True, logits=inp_d_logits)
-        Ld_fake = self.d_criterion(is_real_pred=False, logits=rec_d_logits)
-        Ld = Ld_real + Ld_fake
-        Lg_adv = self.d_criterion(is_real_pred=True, logits=rec_d_logits, for_g=True)
+            acc_real = (inp_d_logits > 0).float().mean().item()
+            acc_fake = (rec_d_logits < 0).float().mean().item()
+            Ld_real = self.d_criterion(is_real_pred=True, logits=inp_d_logits)
+            Ld_fake = self.d_criterion(is_real_pred=False, logits=rec_d_logits)
+            Ld = Ld_real + Ld_fake
+            self._assert_finite('Ld', Ld, ep, it, 'stage2')
+            with maybe_record_function('HR_VAE_disc'):
+                with self.disc_opt.amp_ctx:
+                    Lg_adv = self._generator_adv_loss(rec_B3HW, fade_blur_schedule)
+                    self._assert_finite('Lg_adv', Lg_adv, ep, it, 'stage2')
 
-        if self.adapt_wei_disc:
-            wei_g = self._compute_adaptive_weight(Lnll, Lg_adv, self.vae_wo_ddp.decoder.conv_out.weight)
+            if self.adapt_wei_disc:
+                wei_g = self._compute_adaptive_weight(Lnll, Lg_adv, self.vae_wo_ddp.decoder.conv_out.weight)
+            else:
+                wei_g = inp_hr.new_tensor(self.wei_disc)
+            self._assert_finite('wei_g', wei_g, ep, it, 'stage2')
+            Lg = Lg + wei_g * Lg_adv * warmup_disc_schedule
+            self._assert_finite('Lg', Lg, ep, it, 'stage2')
+            grad_norm_d, scale_log2_d = self.disc_opt.backward_clip_step(stepping=stepping, loss=Ld)
         else:
-            wei_g = inp_hr.new_tensor(self.wei_disc)
-        Lg = Lg + wei_g * Lg_adv * warmup_disc_schedule
+            Ld = inp_hr.new_zeros(())
+            wei_g = inp_hr.new_zeros(())
+            acc_real = 0.0
+            acc_fake = 0.0
+            grad_norm_d, scale_log2_d = 0.0, None
 
         grad_norm_g, scale_log2_g = self.vae_opt.backward_clip_step(stepping=stepping, loss=Lg)
-        grad_norm_d, scale_log2_d = self.disc_opt.backward_clip_step(stepping=stepping, loss=Ld)
 
         if self.using_ema and stepping:
             self._ema_update(self.vae_ema, self.vae_wo_ddp)
@@ -365,15 +515,17 @@ class TwoStageVAETrainer(object):
                 usage=self.usage_max,
                 L_align=L_align.item(),
             )
-            if args.save_reconstruction_images and dist.is_master():
+            if args.save_reconstruction_images and dist.is_master() and self._should_save_reconstruction(it, metric_lg, args):
                 try:
+                    save_dir = self._get_reconstruction_save_dir(args)
+                    self._record_reconstruction_metadata(save_dir, args)
                     save_reconstruction_comparison(
                         original=inp_hr,
                         reconstructed=rec_B3HW.detach(),
-                        save_dir=os.path.join(args.local_out_dir_path, 'reconstruction_samples_hr'),
+                        save_dir=save_dir,
                         ep=ep,
                         it=it,
-                        max_samples=4,
+                        max_samples=args.reconstruction_max_samples,
                     )
                 except Exception as e:
                     print(f'[Warning] Failed to save HR reconstruction images: {e}', flush=True)

@@ -137,6 +137,10 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 - 阶段 1：`local_output/reconstruction_samples_lr/`
 - 阶段 2：`local_output/reconstruction_samples_hr/`
 - 通用重建目录：`local_output/reconstruction_samples/`
+- 两阶段训练里若未显式覆盖目录名，stage 1 / stage 2 默认分别写入上述两个固定目录；可通过 `--reconstruction_dir_name` 覆盖。
+- `epXXXX_itYYYYYY_comparison.png` 表示第 `ep` 个 epoch、第 `it` 个 iteration 保存的一张对比图。
+- 若 `--reconstruction_save_interval=0`，保存时机跟随每个 epoch 内的日志迭代点；若 `>0`，则改为“每 N 个 iteration 保存一张”。
+- 每个重建目录现在会写入 `run_metadata.json`，用于记录本次训练参数、保存频率和后处理说明，避免只能回查 stdout 或 checkpoint。
 
 ### 4.3 Checkpoint
 
