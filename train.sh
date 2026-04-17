@@ -28,14 +28,33 @@ export CUDA_VISIBLE_DEVICES=0
 
 STAGE=${STAGE:-1}
 PORT=${PORT:-13333}
-DATA_PATH=${DATA_PATH:-$DATA_PATH_SMALL}
+
+# Choose dataset path without typing full path.
+# Priority:
+# 1) Explicit DATA_PATH (full path) if provided
+# 2) DATA=small|large (or DATASET=small|large), default "small"
+DATA=${DATA:-${DATASET:-small}}
+case "$DATA" in
+  small|SMALL)
+    DEFAULT_DATA_PATH="$DATA_PATH_SMALL"
+    ;;
+  large|LARGE)
+    DEFAULT_DATA_PATH="$DATA_PATH_LARGE"
+    ;;
+  *)
+    echo "Unknown DATA=$DATA, expected small or large"
+    exit 1
+    ;;
+esac
+DATA_PATH=${DATA_PATH:-$DEFAULT_DATA_PATH}
 
 # 训练配置
 PATCH_NUMS=(5 6 8 10 13 16)
 LR_IMG_SIZE=80
 LR_CH=128
 LR_VOCAB_WIDTH=32
-LR_VQ_BETA=1.0
+LR_VQ_BETA=${LR_VQ_BETA:-1e-3}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
+LR_KL_WARMUP_EP=${LR_KL_WARMUP_EP:-1.0}  # 对 KL 权重做 N epoch 的线性 warmup，避免早期 posterior collapse
 HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
@@ -61,6 +80,7 @@ if [ "$STAGE" = "1" ]; then
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
   --lr_vq_beta="$LR_VQ_BETA" \
+  --lr_kl_warmup_ep="$LR_KL_WARMUP_EP" \
   --vae_lr="$VAE_LR" \
   --disc_lr="$DISC_LR" \
   --ld=0.4 \
@@ -87,6 +107,7 @@ elif [ "$STAGE" = "2" ]; then
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
   --lr_vq_beta="$LR_VQ_BETA" \
+  --lr_kl_warmup_ep="$LR_KL_WARMUP_EP" \
   --vocab_width="$HR_VOCAB_WIDTH" \
   --patch_nums "${PATCH_NUMS[@]}" \
   --vae_lr="$VAE_LR" \

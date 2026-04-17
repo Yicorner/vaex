@@ -97,6 +97,13 @@ L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
    - `lr_img_size`
    - HR/LR 对齐分辨率
    - checkpoint 兼容性
+8. LR VAE 的 `Lkl` 是对 `C×H×W = 32×5×5 = 800` 维全部求和再 batch 平均：
+   - `lr_vq_beta` 直接乘这个求和后的值，1.0 在这个配置下会导致早期 **posterior collapse**（decoder 只能输出数据集均值 → 看起来像“模糊的白球”）
+   - 建议范围 `1e-4 ~ 1e-3`，并搭配 `lr_kl_warmup_ep >= 1.0` 做线性 warmup
+   - 判定塌缩的信号：`Lkl` 在前几百个 iter 保持在 10+ 量级；保存的重建图无结构只有低频成分
+9. 保存训练期对比图必须走 **eval 模式 / `posterior.mode()`**（`_deterministic_reconstruction`）：
+   - 训练期前向使用 `posterior.sample()`，latent 上会再叠一层高斯噪声
+   - 如果保存图用训练期 forward 的输出，早期会看到比 `eval_ep` PSNR 更糟糕的图像——这属于可视化 bug，不是模型 bug
 
 ---
 

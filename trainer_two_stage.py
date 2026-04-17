@@ -139,6 +139,7 @@ class TwoStageVAETrainer(object):
         self.usage_max = 0.0
         self._debug_loss_printed = 0
         self._reconstruction_metadata_written_dirs = set()
+        self._lr_posterior_log_printed = 0
 
         self.set_training_stage(training_stage)
 
@@ -266,6 +267,45 @@ class TwoStageVAETrainer(object):
             self.disc_wo_ddp.train(disc_training)
         return self.d_criterion(is_real_pred=True, logits=fake_logits, for_g=True)
 
+    @torch.no_grad()
+    def _deterministic_reconstruction(self, model: nn.Module, inp: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass in eval mode so posterior uses its mean (no sampling noise).
+
+        This is what `eval_ep` uses, and it's what the saved comparison images should show —
+        otherwise early-training snapshots are dominated by latent sampling noise.
+        """
+        was_training = model.training
+        model.eval()
+        try:
+            rec, _, _ = model(inp)
+        finally:
+            model.train(was_training)
+        return rec.detach()
+
+    @torch.no_grad()
+    def _log_lr_posterior_stats(self, inp_lr: torch.Tensor, ep: int, it: int,
+                                 kl_weight: float, Lrec_for_log: torch.Tensor,
+                                 Lpip: torch.Tensor) -> None:
+        """Print posterior-mean magnitude, posterior std, per-dim KL. Rate-limited."""
+        if self._lr_posterior_log_printed >= 0 and (it == 0 or self._lr_posterior_log_printed < 1e9):
+            pass
+        mean, logvar = self.lr_vae_wo_ddp.encode_to_posterior_stats(inp_lr)
+        logvar = logvar.clamp(-10.0, 5.0)
+        std = (0.5 * logvar).exp()
+        kl_per_dim = 0.5 * (mean.pow(2) + logvar.exp() - 1.0 - logvar)
+        abs_mean = mean.abs().mean().item()
+        std_mean = std.mean().item()
+        kl_pd = kl_per_dim.mean().item()
+        kl_total = kl_per_dim.sum(dim=[1, 2, 3]).mean().item()
+        nll_scalar = Lrec_for_log.item() + Lpip.item()
+        print(
+            f'[LR Posterior][ep{ep}][it{it}] |mean|={abs_mean:.4f}  std={std_mean:.4f}  '
+            f'kl_per_dim={kl_pd:.4f}  kl_sum={kl_total:.4f}  kl_w={kl_weight:.4f}  '
+            f'Lkl_effective={kl_total * kl_weight:.4f}  Lnll≈{nll_scalar:.4f}',
+            flush=True,
+        )
+        self._lr_posterior_log_printed += 1
+
     def _get_alignment_targets(self, inp_lr: torch.Tensor, inp_hr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         with torch.no_grad():
             lr_mean = self.lr_vae_wo_ddp.encode_to_posterior_mean(inp_lr)
@@ -302,6 +342,13 @@ class TwoStageVAETrainer(object):
         if warmup_disc_schedule < 1e-6:
             warmup_disc_schedule = 0.0
 
+        iters_per_ep = max(int(getattr(args, 'iters_per_ep', 0) or 0), 0)
+        warmup_ep = max(float(getattr(args, 'lr_kl_warmup_ep', 0.0) or 0.0), 0.0)
+        if warmup_ep > 0 and iters_per_ep > 0:
+            kl_schedule = min(1.0, (ep * iters_per_ep + it) / max(warmup_ep * iters_per_ep, 1.0))
+        else:
+            kl_schedule = 1.0
+
         with maybe_record_function('LR_VAE_rec'):
             with self.lr_vae_opt.amp_ctx:
                 rec_B3HW, _, Lkl = self.lr_vae(inp_lr)
@@ -324,7 +371,8 @@ class TwoStageVAETrainer(object):
                     Lpip = inp_lr.new_zeros(())
                     Lnll = Lrec
 
-                Lg = Lnll + Lkl
+                Lkl_effective = Lkl * kl_schedule
+                Lg = Lnll + Lkl_effective
                 self._assert_finite('Lnll', Lnll, ep, it, 'stage1')
                 self._assert_finite('Lg_pre_adv', Lg, ep, it, 'stage1')
 
@@ -379,13 +427,16 @@ class TwoStageVAETrainer(object):
                 dnm=grad_norm_d,
                 usage=0.0,
             )
+            if self._lr_posterior_log_printed < getattr(args, 'lr_posterior_log_limit', 0):
+                self._log_lr_posterior_stats(inp_lr, ep, it, kl_schedule, Lrec_for_log, Lpip)
             if args.save_reconstruction_images and dist.is_master() and self._should_save_reconstruction(it, metric_lg, args):
                 try:
                     save_dir = self._get_reconstruction_save_dir(args)
                     self._record_reconstruction_metadata(save_dir, args)
+                    rec_for_vis = self._deterministic_reconstruction(self.lr_vae_wo_ddp, inp_lr)
                     save_reconstruction_comparison(
                         original=inp_lr,
-                        reconstructed=rec_B3HW.detach(),
+                        reconstructed=rec_for_vis,
                         save_dir=save_dir,
                         ep=ep,
                         it=it,
@@ -519,9 +570,10 @@ class TwoStageVAETrainer(object):
                 try:
                     save_dir = self._get_reconstruction_save_dir(args)
                     self._record_reconstruction_metadata(save_dir, args)
+                    rec_for_vis = self._deterministic_reconstruction(self.vae_wo_ddp, inp_hr)
                     save_reconstruction_comparison(
                         original=inp_hr,
-                        reconstructed=rec_B3HW.detach(),
+                        reconstructed=rec_for_vis,
                         save_dir=save_dir,
                         ep=ep,
                         it=it,

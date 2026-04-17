@@ -67,6 +67,8 @@ class Args(Tap):
     lr_ch: int = 128                # LR VAE channel count
     lr_vocab_width: int = 32        # LR VAE latent channels
     lr_vq_beta: float = 1.0         # LR VAE KL loss weight (simple, no compression)
+    lr_kl_warmup_ep: float = 0.0    # linearly ramp KL weight from 0 to lr_vq_beta over the first N epochs; 0 disables warmup
+    lr_posterior_log_limit: int = 10  # how many times to print posterior statistics for stage-1 debugging
     lr_img_size: int = 80           # LR image size (80x80 -> 5x5 after 16x downsample)
     
     # Two-stage training control

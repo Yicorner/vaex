@@ -105,6 +105,7 @@ def build_two_stage_trainer(args: arg_util.Args):
         drop_last=False,
     )
     iters_train = len(ld_train)
+    args.iters_per_ep = iters_train
     ld_train = iter(ld_train)
     print(f'[dataloader] gbs={args.bs}, lbs={args.lbs}, iters_train={iters_train}, mode={load_mode}')
 
