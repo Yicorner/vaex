@@ -8,3 +8,6 @@
 #   STAGE=2 bash train.sh              # FEATURIZE，跑 stage 2
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
+
+# 如何查看torch run 命令是否被kill
+ps -ef | grep torchrun
