@@ -104,6 +104,10 @@ L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
 9. 保存训练期对比图必须走 **eval 模式 / `posterior.mode()`**（`_deterministic_reconstruction`）：
    - 训练期前向使用 `posterior.sample()`，latent 上会再叠一层高斯噪声
    - 如果保存图用训练期 forward 的输出，早期会看到比 `eval_ep` PSNR 更糟糕的图像——这属于可视化 bug，不是模型 bug
+10. `LR_VAE._init_mean_logvar_conv()` 的初始化结果不能被二次通用初始化覆盖：
+   - 该函数会把 `mean_logvar_conv` 的 logvar 偏置设为 `-2.0`，用于让 stage 1 起步时 `posterior std` 低于 1，避免一开始就贴近先验
+   - 在 `build_two_stage_models()` 中做 `init_weights()` 时，不能再次对 `lr_vae.mean_logvar_conv` 执行通用 conv 初始化（通用逻辑会把 bias 清零）
+   - 若必须重置 LR VAE 的其余模块，应在最后重新调用一次 `_init_mean_logvar_conv()`，并在训练日志核对 `[LR Posterior][it0]` 的 `std` 不是约 `1.0`
 
 ---
 

@@ -54,7 +54,6 @@ def build_two_stage_models(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
     lr_need_init = [
         lr_vae.encoder,
         lr_vae.quant_conv,
-        lr_vae.mean_logvar_conv,
         lr_vae.post_quant_conv,
         lr_vae.decoder,
     ]

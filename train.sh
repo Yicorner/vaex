@@ -60,17 +60,23 @@ VAE_LR=1e-4
 DISC_LR=1e-4
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
-RECON_DIR_NAME=${RECON_DIR_NAME:-}
+RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
 
 # 输出目录
 STAGE1_BED="myvaex_stage1_lr_vae"
 STAGE2_BED="myvaex_stage2_hr_aligned"
 STAGE1_CKPT="${STAGE1_BED}/ckpt-best.pth"
+STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
+STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
+STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"
+STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with first-scale posterior mean alignment"
 
 if [ "$STAGE" = "1" ]; then
+  EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE1_DEFAULT_EXP_NAME}}
+  EXP_NOTE=${EXP_NOTE:-${exp_note:-$STAGE1_DEFAULT_EXP_NOTE}}
   torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_two_stage.py \
-  --exp_name="stage1_lr_vae" --bed="$STAGE1_BED" \
-  --exp_note="Stage 1: train LR VAE to posterior mean tokens" \
+  --exp_name="$EXP_NAME" --bed="$STAGE1_BED" \
+  --exp_note="$EXP_NOTE" \
   --data="$DATA_PATH" \
   --training_stage=1 \
   --lbs=8 \
@@ -92,9 +98,11 @@ if [ "$STAGE" = "1" ]; then
   --debug_loss_printed_limit=10 \
   --debug_kl_count_limit=10
 elif [ "$STAGE" = "2" ]; then
+  EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE2_DEFAULT_EXP_NAME}}
+  EXP_NOTE=${EXP_NOTE:-${exp_note:-$STAGE2_DEFAULT_EXP_NOTE}}
   torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_two_stage.py \
-  --exp_name="stage2_hr_vae_aligned" --bed="$STAGE2_BED" \
-  --exp_note="Stage 2: train HR multi-scale VAE with first-scale posterior mean alignment" \
+  --exp_name="$EXP_NAME" --bed="$STAGE2_BED" \
+  --exp_note="$EXP_NOTE" \
   --data="$DATA_PATH" \
   --training_stage=2 \
   --use_lr_hr_alignment=True \
