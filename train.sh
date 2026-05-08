@@ -53,11 +53,12 @@ PATCH_NUMS=(5 6 8 10 13 16)
 LR_IMG_SIZE=80
 LR_CH=128
 LR_VOCAB_WIDTH=32
-LR_VQ_BETA=${LR_VQ_BETA:-1e-3}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
-LR_KL_WARMUP_EP=${LR_KL_WARMUP_EP:-1.0}  # 对 KL 权重做 N epoch 的线性 warmup，避免早期 posterior collapse
+LR_VQ_BETA=${LR_VQ_BETA:-${lr_vq_beta:-1e-3}}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
+LR_KL_WARMUP_EP=${LR_KL_WARMUP_EP:-${lr_kl_warmup_ep:-1.0}}  # 对 KL 权重做 N epoch 的线性 warmup，避免早期 posterior collapse
 HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
+L1_WEIGHT=${L1_WEIGHT:-${L1:-0.2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
@@ -89,6 +90,7 @@ if [ "$STAGE" = "1" ]; then
   --lr_kl_warmup_ep="$LR_KL_WARMUP_EP" \
   --vae_lr="$VAE_LR" \
   --disc_lr="$DISC_LR" \
+  --l1="$L1_WEIGHT" \
   --ld=0.4 \
   --disc_start_ep=20 \
   --save_reconstruction_images=True \
@@ -120,6 +122,7 @@ elif [ "$STAGE" = "2" ]; then
   --patch_nums "${PATCH_NUMS[@]}" \
   --vae_lr="$VAE_LR" \
   --disc_lr="$DISC_LR" \
+  --l1="$L1_WEIGHT" \
   --ld=0.4 \
   --disc_start_ep=30 \
   --save_reconstruction_images=True \
