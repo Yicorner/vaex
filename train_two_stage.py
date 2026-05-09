@@ -77,7 +77,10 @@ def build_two_stage_trainer(args: arg_util.Args):
     [print(l) for l in auto_resume_info]
 
     load_mode = 'lr_only' if args.training_stage == 1 else 'both'
-    dataset_train, dataset_val = build_lr_hr_dataset(args.data, load_mode=load_mode)
+    dataset_train, dataset_val = build_lr_hr_dataset(
+        args.data, load_mode=load_mode,
+        lr_folder=args.lr_folder, hr_folder=args.hr_folder,
+    )
     ld_train = DataLoader(
         dataset=dataset_train,
         num_workers=args.workers,

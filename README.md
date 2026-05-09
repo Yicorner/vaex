@@ -65,4 +65,9 @@ ps -ef | grep torchrun
 # lr_kl_warmup_ep
 # 可用 LR_KL_WARMUP_EP（或小写 lr_kl_warmup_ep）覆盖默认 --lr_kl_warmup_ep（默认 1.0）。
 
+# lr_folder / hr_folder
+# 可用 LR_FOLDER（或小写 lr_folder）指定数据集中 LR 子目录名（默认 LR）。
+# 可用 HR_FOLDER（或小写 hr_folder）指定数据集中 HR 子目录名（默认 HR）。
+# 示例：LR_FOLDER=LR_64x64 bash train.sh
+
 

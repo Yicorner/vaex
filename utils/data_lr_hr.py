@@ -18,30 +18,34 @@ class LR_HR_Dataset(Dataset):
     """Dataset that loads LR and/or HR images"""
     
     def __init__(
-        self, 
-        data_dir: str, 
+        self,
+        data_dir: str,
         transform: Optional[transforms.Compose] = None,
         augment: bool = False,
         load_mode: str = 'both',  # 'lr_only', 'hr_only', or 'both'
+        lr_folder: str = 'LR',
+        hr_folder: str = 'HR',
     ):
         """
         Args:
-            data_dir: Root directory containing 'LR', 'HR', and optionally 'REF' subdirectories
+            data_dir: Root directory containing LR/HR subdirectories
             transform: Transform to apply to images
             augment: Whether to apply augmentation
             load_mode: What to load - 'lr_only', 'hr_only', or 'both'
+            lr_folder: Name of the LR subdirectory (default: 'LR')
+            hr_folder: Name of the HR subdirectory (default: 'HR')
         """
         self.data_dir = data_dir
         self.transform = transform
         self.augment = augment
         self.load_mode = load_mode
-        
+
         # Build file lists
         self.lr_files = []
         self.hr_files = []
-        
-        lr_dir = os.path.join(data_dir, 'LR')
-        hr_dir = os.path.join(data_dir, 'HR')
+
+        lr_dir = os.path.join(data_dir, lr_folder)
+        hr_dir = os.path.join(data_dir, hr_folder)
         
         if load_mode in ['lr_only', 'both'] and os.path.isdir(lr_dir):
             self.lr_files = sorted([
@@ -137,43 +141,41 @@ def normalize_01_into_pm1(x):
 def build_lr_hr_dataset(
     datasets_str: str,
     load_mode: str = 'both',
+    lr_folder: str = 'LR',
+    hr_folder: str = 'HR',
 ):
     """
     Build LR-HR dataset for two-stage training.
-    
+
     Args:
         datasets_str: Path to dataset root directory
         load_mode: 'lr_only', 'hr_only', or 'both'
-    
+        lr_folder: Name of the LR subdirectory (default: 'LR')
+        hr_folder: Name of the HR subdirectory (default: 'HR')
+
     Returns:
         train_set, val_set
     """
-    train_aug = [
-        transforms.ToTensor(), 
-        normalize_01_into_pm1,
-    ]
-    val_aug = [
-        transforms.ToTensor(), 
-        normalize_01_into_pm1,
-    ]
-    
-    train_aug = transforms.Compose(train_aug)
-    val_aug = transforms.Compose(val_aug)
-    
+    transform = transforms.Compose([transforms.ToTensor(), normalize_01_into_pm1])
+
     train_set = LR_HR_Dataset(
-        data_dir=os.path.join(datasets_str, "train"), 
-        transform=train_aug, 
+        data_dir=os.path.join(datasets_str, "train"),
+        transform=transform,
         augment=True,
         load_mode=load_mode,
+        lr_folder=lr_folder,
+        hr_folder=hr_folder,
     )
-    
+
     val_set = LR_HR_Dataset(
-        data_dir=os.path.join(datasets_str, "val"), 
-        transform=val_aug, 
+        data_dir=os.path.join(datasets_str, "val"),
+        transform=transform,
         augment=False,
         load_mode=load_mode,
+        lr_folder=lr_folder,
+        hr_folder=hr_folder,
     )
-    
-    print(f'[LR-HR Dataset] mode={load_mode}, {len(train_set)=}, {len(val_set)=}')
+
+    print(f'[LR-HR Dataset] mode={load_mode}, lr_folder={lr_folder}, hr_folder={hr_folder}, {len(train_set)=}, {len(val_set)=}')
     return train_set, val_set
 

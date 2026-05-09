@@ -48,6 +48,10 @@ case "$DATA" in
 esac
 DATA_PATH=${DATA_PATH:-$DEFAULT_DATA_PATH}
 
+# 数据子目录（可按需覆盖）
+LR_FOLDER=${LR_FOLDER:-${lr_folder:-LR}}
+HR_FOLDER=${HR_FOLDER:-${hr_folder:-HR}}
+
 # 训练配置
 PATCH_NUMS=(5 6 8 10 13 16)
 LR_IMG_SIZE=80
@@ -79,6 +83,8 @@ if [ "$STAGE" = "1" ]; then
   --exp_name="$EXP_NAME" --bed="$STAGE1_BED" \
   --exp_note="$EXP_NOTE" \
   --data="$DATA_PATH" \
+  --lr_folder="$LR_FOLDER" \
+  --hr_folder="$HR_FOLDER" \
   --training_stage=1 \
   --lbs=8 \
   --ep=100 \
@@ -106,6 +112,8 @@ elif [ "$STAGE" = "2" ]; then
   --exp_name="$EXP_NAME" --bed="$STAGE2_BED" \
   --exp_note="$EXP_NOTE" \
   --data="$DATA_PATH" \
+  --lr_folder="$LR_FOLDER" \
+  --hr_folder="$HR_FOLDER" \
   --training_stage=2 \
   --use_lr_hr_alignment=True \
   --alignment_loss_weight=1.0 \

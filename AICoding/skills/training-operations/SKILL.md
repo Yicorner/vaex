@@ -40,6 +40,15 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `use_lr_hr_alignment` | `False` | 是否启用 LR-HR 对齐损失 |
 | `alignment_loss_weight` | `1.0` | 对齐损失权重 |
 
+### 1.3.5 数据子目录
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `lr_folder` | `'LR'` | 每个 split 下存放 LR 图像的子目录名，可自定义（如 `LR_64x64`） |
+| `hr_folder` | `'HR'` | 每个 split 下存放 HR 图像的子目录名 |
+
+在 `train.sh` 中通过环境变量 `LR_FOLDER` / `HR_FOLDER` 覆盖，支持小写别名 `lr_folder` / `hr_folder`。
+
 ### 1.4 实验与训练
 
 | 参数 | 默认值 | 说明 |

@@ -145,6 +145,8 @@ class Args(Tap):
     # data
     subset: float = 1.0         # < 1.0 for use subset
     img_size: int = 256
+    lr_folder: str = 'LR'       # subdirectory name for LR images under each split
+    hr_folder: str = 'HR'       # subdirectory name for HR images under each split
     mid_reso: float = 1.125     # aug: first resize to mid_reso = 1.125 * data_load_reso, then crop to data_load_reso
     hflip: bool = False         # augmentation: horizontal flip
     workers: int = 1            # num workers; 0: auto, -1: don't use multiprocessing in DataLoader
