@@ -175,14 +175,14 @@ checkpoint 内容包含：
 
 脚本：`eval_stage1_ckpt.py`
 
-用途：对某个 stage 1 的 `ckpt` 在 `test/LR` + `test/HR` 上做随机抽样评估，并导出可复盘产物。
+用途：对某个 stage 1 的 `ckpt` 在单一测试目录上做随机抽样评估（输入图像自重建），并导出可复盘产物。
 
 ### 6.1 功能
 
-- 随机抽样（默认 `100` 张）做推理
+- 在 `--test_dir` 下随机抽样（默认 `100` 张）做推理
 - 逐张输出 `PSNR`、`SSIM` 到 `metrics_per_image.csv`
 - 输出统计摘要到 `metrics_summary.json` 和 `metrics.log`
-- 输出重建可视化到 `comparisons/`（`4x2`，左 `GT` 右 `Pred`）
+- 输出重建可视化到 `comparisons/`（`4x2`，左 `Input` 右 `Pred`）
 - 同步输出 `100` 张单图预测到 `predictions/`
 
 ### 6.2 用法示例
@@ -190,7 +190,7 @@ checkpoint 内容包含：
 ```bash
 python eval_stage1_ckpt.py \
   --ckpt_path local_output/ckpt-3.pth \
-  --test_root /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test \
   --output_dir local_output/stage1_test_eval \
   --num_samples 100 \
   --seed 42 \
@@ -199,5 +199,5 @@ python eval_stage1_ckpt.py \
 
 说明：
 
-- `--test_root` 目录下需有 `LR/` 与 `HR/` 子目录；也可改用 `--test_lr_dir` + `--test_hr_dir`
+- 脚本只接收一个测试目录参数 `--test_dir`，直接读取该目录下的图片文件（不会再拼接 `LR/HR` 子目录）
 - 模型结构参数默认从 checkpoint 的 `args` 读取（可用 CLI 覆盖）
