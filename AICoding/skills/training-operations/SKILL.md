@@ -168,3 +168,36 @@ checkpoint 内容包含：
 4. 最后检查 TensorBoard、stdout 备份和 checkpoint 路径是否与预期一致。
 
 如果问题涉及 stage 逻辑或对齐损失，去看：`AICoding/skills/two-stage-training/`
+
+---
+
+## 6. Stage 1 Checkpoint 测试脚本
+
+脚本：`eval_stage1_ckpt.py`
+
+用途：对某个 stage 1 的 `ckpt` 在 `test/LR` + `test/HR` 上做随机抽样评估，并导出可复盘产物。
+
+### 6.1 功能
+
+- 随机抽样（默认 `100` 张）做推理
+- 逐张输出 `PSNR`、`SSIM` 到 `metrics_per_image.csv`
+- 输出统计摘要到 `metrics_summary.json` 和 `metrics.log`
+- 输出重建可视化到 `comparisons/`（`4x2`，左 `GT` 右 `Pred`）
+- 同步输出 `100` 张单图预测到 `predictions/`
+
+### 6.2 用法示例
+
+```bash
+python eval_stage1_ckpt.py \
+  --ckpt_path local_output/ckpt-3.pth \
+  --test_root /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test \
+  --output_dir local_output/stage1_test_eval \
+  --num_samples 100 \
+  --seed 42 \
+  --batch_size 4
+```
+
+说明：
+
+- `--test_root` 目录下需有 `LR/` 与 `HR/` 子目录；也可改用 `--test_lr_dir` + `--test_hr_dir`
+- 模型结构参数默认从 checkpoint 的 `args` 读取（可用 CLI 覆盖）
