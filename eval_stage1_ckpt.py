@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a stage-1 LR VAE checkpoint on paired test images.
+"""Evaluate a stage-1 LR VAE checkpoint on a single image folder.
 
 Outputs:
 - per-image PSNR / SSIM CSV
@@ -15,9 +15,8 @@ import csv
 import json
 import math
 import random
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence
 
 import numpy as np
 import torch
@@ -31,26 +30,12 @@ from utils.image_saver import denormalize_image, save_reconstruction_comparison,
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
 
-@dataclass(frozen=True)
-class PairedSample:
-    key: str
-    lr_path: Path
-    hr_path: Path
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate stage-1 LR VAE checkpoint on test set.")
+    parser = argparse.ArgumentParser(description="Evaluate stage-1 LR VAE checkpoint on one image folder.")
     parser.add_argument("--ckpt_path", type=Path, required=True, help="Path to stage-1 checkpoint (e.g., local_output/ckpt-3.pth).")
-    parser.add_argument(
-        "--test_root",
-        type=Path,
-        default=None,
-        help="Path to test folder containing LR/ and HR/ subfolders.",
-    )
-    parser.add_argument("--test_lr_dir", type=Path, default=None, help="Optional explicit LR dir (overrides test_root/LR).")
-    parser.add_argument("--test_hr_dir", type=Path, default=None, help="Optional explicit HR dir (overrides test_root/HR).")
+    parser.add_argument("--test_dir", type=Path, required=True, help="Folder containing images to test (direct children).")
     parser.add_argument("--output_dir", type=Path, required=True, help="Where logs and images are written.")
-    parser.add_argument("--num_samples", type=int, default=100, help="Number of random paired samples to evaluate.")
+    parser.add_argument("--num_samples", type=int, default=100, help="Number of random images to evaluate.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling.")
     parser.add_argument("--batch_size", type=int, default=4, help="Inference batch size and comparison grid rows.")
     parser.add_argument("--device", type=str, default="auto", help="cuda | cpu | auto")
@@ -67,17 +52,6 @@ def resolve_device(raw: str) -> torch.device:
     return torch.device(raw)
 
 
-def resolve_test_dirs(args: argparse.Namespace) -> Tuple[Path, Path]:
-    if args.test_lr_dir is not None or args.test_hr_dir is not None:
-        if args.test_lr_dir is None or args.test_hr_dir is None:
-            raise ValueError("When using explicit test dirs, both --test_lr_dir and --test_hr_dir are required.")
-        return args.test_lr_dir, args.test_hr_dir
-
-    if args.test_root is None:
-        raise ValueError("Provide either --test_root or both --test_lr_dir/--test_hr_dir.")
-    return args.test_root / "LR", args.test_root / "HR"
-
-
 def list_images(folder: Path) -> Dict[str, Path]:
     if not folder.exists():
         raise FileNotFoundError(f"Folder not found: {folder}")
@@ -88,24 +62,16 @@ def list_images(folder: Path) -> Dict[str, Path]:
     return paths
 
 
-def build_pairs(lr_dir: Path, hr_dir: Path) -> List[PairedSample]:
-    lr_map = list_images(lr_dir)
-    hr_map = list_images(hr_dir)
-    keys = sorted(set(lr_map.keys()) & set(hr_map.keys()))
-    if not keys:
-        raise ValueError(f"No paired images found. LR={lr_dir}, HR={hr_dir}")
-    return [PairedSample(key=k, lr_path=lr_map[k], hr_path=hr_map[k]) for k in keys]
-
-
-def sample_pairs(pairs: Sequence[PairedSample], n: int, seed: int) -> List[PairedSample]:
+def sample_images(img_map: Dict[str, Path], n: int, seed: int) -> List[Path]:
+    paths = list(img_map.values())
     if n <= 0:
         raise ValueError("--num_samples must be > 0.")
-    if n > len(pairs):
-        raise ValueError(f"Requested {n} samples, but only {len(pairs)} paired images are available.")
+    if n > len(paths):
+        raise ValueError(f"Requested {n} samples, but only {len(paths)} images are available.")
     rng = random.Random(seed)
-    indices = list(range(len(pairs)))
+    indices = list(range(len(paths)))
     rng.shuffle(indices)
-    return [pairs[i] for i in indices[:n]]
+    return [paths[i] for i in indices[:n]]
 
 
 def to_pm1_tensor(pil_img: Image.Image) -> torch.Tensor:
@@ -161,7 +127,7 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
     return model
 
 
-def batch_iter(items: Sequence[PairedSample], batch_size: int) -> Iterable[Sequence[PairedSample]]:
+def batch_iter(items: Sequence[Path], batch_size: int) -> Iterable[Sequence[Path]]:
     for i in range(0, len(items), batch_size):
         yield items[i:i + batch_size]
 
@@ -174,7 +140,7 @@ def to_img_np_01(t: torch.Tensor) -> np.ndarray:
 
 def evaluate(
     model: LR_VAE,
-    samples: Sequence[PairedSample],
+    samples: Sequence[Path],
     output_dir: Path,
     batch_size: int,
     device: torch.device,
@@ -195,23 +161,20 @@ def evaluate(
 
     with torch.no_grad():
         for chunk in batch_iter(samples, batch_size):
-            lr_tensors = []
-            hr_tensors = []
-            for item in chunk:
-                lr_img = Image.open(item.lr_path).convert("RGB")
-                hr_img = Image.open(item.hr_path).convert("RGB")
-                lr_tensors.append(to_pm1_tensor(lr_img))
-                hr_tensors.append(to_pm1_tensor(hr_img))
-                sampled_lines.append(f"{item.key}\t{item.lr_path}\t{item.hr_path}")
+            inp_tensors = []
+            keys: List[str] = []
+            for img_path in chunk:
+                img = Image.open(img_path).convert("RGB")
+                inp_tensors.append(to_pm1_tensor(img))
+                keys.append(img_path.stem)
+                sampled_lines.append(str(img_path))
 
-            lr_batch = torch.stack(lr_tensors, dim=0).to(device, non_blocking=True)
-            hr_batch = torch.stack(hr_tensors, dim=0)  # keep on cpu for metrics/logging
-
-            pred_batch, _, _ = model(lr_batch)
+            inp_batch = torch.stack(inp_tensors, dim=0)
+            pred_batch, _, _ = model(inp_batch.to(device, non_blocking=True))
             pred_batch = pred_batch.detach().cpu().clamp(-1, 1)
 
             save_reconstruction_comparison(
-                original=hr_batch,
+                original=inp_batch,
                 reconstructed=pred_batch,
                 save_dir=str(comparisons_dir),
                 ep=0,
@@ -221,16 +184,16 @@ def evaluate(
             comp_idx += 1
 
             pred_denorm = denormalize_image(pred_batch.clone())  # [0, 1]
-            for idx, item in enumerate(chunk):
-                gt_np = to_img_np_01(hr_batch[idx])
+            for idx, key in enumerate(keys):
+                gt_np = to_img_np_01(inp_batch[idx])
                 pred_np = np.transpose(pred_denorm[idx].numpy(), (1, 2, 0))
 
                 cur_psnr = float(peak_signal_noise_ratio(gt_np, pred_np, data_range=1.0))
                 cur_ssim = float(structural_similarity(gt_np, pred_np, channel_axis=2, data_range=1.0))
-                rows.append({"key": item.key, "psnr": cur_psnr, "ssim": cur_ssim})
+                rows.append({"key": key, "psnr": cur_psnr, "ssim": cur_ssim})
 
                 pred_img = tensor_to_pil_image(pred_denorm[idx])
-                pred_img.save(predictions_dir / f"{item.key}_pred.png")
+                pred_img.save(predictions_dir / f"{key}_pred.png")
 
     with sampled_list_path.open("w", encoding="utf-8") as f:
         f.write("\n".join(sampled_lines) + "\n")
@@ -277,16 +240,15 @@ def main() -> None:
     args = parse_args()
     device = resolve_device(args.device)
 
-    lr_dir, hr_dir = resolve_test_dirs(args)
-    all_pairs = build_pairs(lr_dir, hr_dir)
-    chosen_pairs = sample_pairs(all_pairs, args.num_samples, args.seed)
+    image_map = list_images(args.test_dir)
+    chosen_images = sample_images(image_map, args.num_samples, args.seed)
 
     ckpt = load_ckpt(args.ckpt_path)
     model = build_model_from_ckpt(ckpt, args, device)
 
     summary = evaluate(
         model=model,
-        samples=chosen_pairs,
+        samples=chosen_images,
         output_dir=args.output_dir,
         batch_size=max(1, args.batch_size),
         device=device,
