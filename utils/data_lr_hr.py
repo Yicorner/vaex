@@ -23,6 +23,8 @@ class LR_HR_Dataset(Dataset):
         transform: Optional[transforms.Compose] = None,
         augment: bool = False,
         load_mode: str = 'both',  # 'lr_only', 'hr_only', or 'both'
+        lr_img_size: Optional[int] = None,
+        return_lr_original: bool = False,
     ):
         """
         Args:
@@ -35,6 +37,8 @@ class LR_HR_Dataset(Dataset):
         self.transform = transform
         self.augment = augment
         self.load_mode = load_mode
+        self.lr_img_size = int(lr_img_size) if lr_img_size is not None else None
+        self.return_lr_original = bool(return_lr_original)
         
         # Build file lists
         self.lr_files = []
@@ -89,8 +93,14 @@ class LR_HR_Dataset(Dataset):
             img = Image.open(self.lr_files[idx]).convert('RGB')
             if self.augment:
                 img = self._augment(img)
+            img_gt = img
+            if self.lr_img_size is not None:
+                img = img.resize((self.lr_img_size, self.lr_img_size), resample=Image.BICUBIC)
             if self.transform:
                 img = self.transform(img)
+                img_gt = self.transform(img_gt)
+            if self.return_lr_original:
+                return img, img_gt
             return img
         
         elif self.load_mode == 'hr_only':
@@ -114,6 +124,9 @@ class LR_HR_Dataset(Dataset):
                 lr_img = self._augment(lr_img)
                 random.seed(seed)
                 hr_img = self._augment(hr_img)
+
+            if self.lr_img_size is not None:
+                lr_img = lr_img.resize((self.lr_img_size, self.lr_img_size), resample=Image.BICUBIC)
             
             if self.transform:
                 lr_img = self.transform(lr_img)
@@ -137,6 +150,8 @@ def normalize_01_into_pm1(x):
 def build_lr_hr_dataset(
     datasets_str: str,
     load_mode: str = 'both',
+    lr_img_size: Optional[int] = None,
+    return_lr_original: bool = False,
 ):
     """
     Build LR-HR dataset for two-stage training.
@@ -144,6 +159,8 @@ def build_lr_hr_dataset(
     Args:
         datasets_str: Path to dataset root directory
         load_mode: 'lr_only', 'hr_only', or 'both'
+        lr_img_size: Target LR size before tensor conversion; None keeps source resolution
+        return_lr_original: For stage-1 visualization, return (resized_lr, original_lr)
     
     Returns:
         train_set, val_set
@@ -165,6 +182,8 @@ def build_lr_hr_dataset(
         transform=train_aug, 
         augment=True,
         load_mode=load_mode,
+        lr_img_size=lr_img_size,
+        return_lr_original=return_lr_original,
     )
     
     val_set = LR_HR_Dataset(
@@ -172,6 +191,8 @@ def build_lr_hr_dataset(
         transform=val_aug, 
         augment=False,
         load_mode=load_mode,
+        lr_img_size=lr_img_size,
+        return_lr_original=return_lr_original,
     )
     
     print(f'[LR-HR Dataset] mode={load_mode}, {len(train_set)=}, {len(val_set)=}')

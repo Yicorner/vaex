@@ -8,6 +8,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 import torch
+import torch.nn.functional as F
 import torchvision
 from PIL import Image
 import numpy as np
@@ -59,6 +60,7 @@ def save_reconstruction_comparison(
     ep: int,
     it: int,
     max_samples: int = 4,
+    original_for_display: Optional[torch.Tensor] = None,
 ) -> str:
     """
     Save original and reconstructed images side by side for comparison.
@@ -80,24 +82,46 @@ def save_reconstruction_comparison(
     # Denormalize images
     original_denorm = denormalize_image(original.clone())
     reconstructed_denorm = denormalize_image(reconstructed.clone())
+    display_gt_denorm = None
+    reconstructed_bicubic_denorm = None
+    reconstructed_nearest_denorm = None
+    if original_for_display is not None:
+        display_gt_denorm = denormalize_image(original_for_display.clone())
+        if display_gt_denorm.shape[-2:] != reconstructed_denorm.shape[-2:]:
+            target_hw = display_gt_denorm.shape[-2:]
+            reconstructed_bicubic_denorm = denormalize_image(
+                F.interpolate(reconstructed.clone(), size=target_hw, mode='bicubic', align_corners=False)
+            )
+            reconstructed_nearest_denorm = denormalize_image(
+                F.interpolate(reconstructed.clone(), size=target_hw, mode='nearest')
+            )
     
     # Limit number of samples
     batch_size = original.shape[0]
     num_samples = min(batch_size, max_samples)
     
-    # Create comparison grid: original and reconstructed side by side
-    # Shape: [num_samples*2, C, H, W]
+    # Create comparison grid:
+    # - default: 2 columns (original | reconstructed)
+    # - LR-resized visualization: 3 columns (gt | resized_pred | pred)
     comparison_images = []
-    for i in range(num_samples):
-        comparison_images.append(original_denorm[i])
-        comparison_images.append(reconstructed_denorm[i])
-    
+    nrow = 2
+    if reconstructed_bicubic_denorm is not None and reconstructed_nearest_denorm is not None and display_gt_denorm is not None:
+        nrow = 3
+        for i in range(num_samples):
+            comparison_images.append(display_gt_denorm[i])
+            comparison_images.append(reconstructed_bicubic_denorm[i])
+            comparison_images.append(reconstructed_nearest_denorm[i])
+    else:
+        for i in range(num_samples):
+            comparison_images.append(original_denorm[i])
+            comparison_images.append(reconstructed_denorm[i])
+
     comparison_tensor = torch.stack(comparison_images, dim=0)
-    
-    # Create grid: 2 columns (original | reconstructed), num_samples rows
+
+    # Create grid with fixed columns per sample row.
     grid = torchvision.utils.make_grid(
         comparison_tensor,
-        nrow=2,  # 2 columns: original, reconstructed
+        nrow=nrow,
         padding=2,
         pad_value=1.0,  # White padding
     )
@@ -134,7 +158,7 @@ def save_reconstruction_run_metadata(
         "save_dir": save_dir,
         "filename_pattern": filename_pattern,
         "frequency_description": frequency_description,
-        "comparison_layout": "2 columns per row: original | reconstructed",
+        "comparison_layout": "2 columns per row: original | reconstructed; when LR resize visualization is enabled: 3 columns per row: gt | resized_pred | pred",
         "max_samples_per_image": int(max_samples),
         "postprocess": [
             "denormalize tensors from [-1, 1] to [0, 1]",

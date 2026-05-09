@@ -50,7 +50,7 @@ DATA_PATH=${DATA_PATH:-$DEFAULT_DATA_PATH}
 
 # 训练配置
 PATCH_NUMS=(5 6 8 10 13 16)
-LR_IMG_SIZE=80
+LR_IMG_SIZE=64
 LR_CH=128
 LR_VOCAB_WIDTH=32
 LR_VQ_BETA=${LR_VQ_BETA:-${lr_vq_beta:-1e-3}}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
@@ -62,11 +62,13 @@ L1_WEIGHT=${L1_WEIGHT:-${L1:-0.2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
+RETURN_LR_ORIGINAL=${RETURN_LR_ORIGINAL:-False}
 
 # 输出目录
 STAGE1_BED="myvaex_stage1_lr_vae"
 STAGE2_BED="myvaex_stage2_hr_aligned"
-STAGE1_CKPT="${STAGE1_BED}/ckpt-best.pth"
+STAGE1_CKPT_DEFAULT="${STAGE1_BED}/ckpt-best.pth"
+STAGE1_CKPT="${STAGE1_CKPT:-$STAGE1_CKPT_DEFAULT}"
 STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
 STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
 STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"
@@ -94,6 +96,7 @@ if [ "$STAGE" = "1" ]; then
   --ld=0.4 \
   --disc_start_ep=20 \
   --save_reconstruction_images=True \
+  --return_lr_original="$RETURN_LR_ORIGINAL" \
   --reconstruction_save_interval="$RECON_SAVE_INTERVAL" \
   --reconstruction_max_samples="$RECON_MAX_SAMPLES" \
   --reconstruction_dir_name="$RECON_DIR_NAME" \
@@ -126,6 +129,7 @@ elif [ "$STAGE" = "2" ]; then
   --ld=0.4 \
   --disc_start_ep=30 \
   --save_reconstruction_images=True \
+  --return_lr_original="$RETURN_LR_ORIGINAL" \
   --reconstruction_save_interval="$RECON_SAVE_INTERVAL" \
   --reconstruction_max_samples="$RECON_MAX_SAMPLES" \
   --reconstruction_dir_name="$RECON_DIR_NAME" \

@@ -196,6 +196,16 @@ python eval_stage1_ckpt.py \
   --seed 42 \
   --batch_size 4
 ```
+```bash
+python eval_stage1_ckpt.py \
+  --ckpt_path local_output/test/test_stage1_fix_init_issur_L1=1.0_KLweightDown/ckpt-3.pth \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test/LR \
+  --output_dir local_output/test/test_stage1_fix_init_issur_L1=1.0_KLweightDown \
+  --num_samples 100 \
+  --seed 42 \
+  --batch_size 4
+```
+
 
 说明：
 

@@ -69,7 +69,7 @@ class Args(Tap):
     lr_vq_beta: float = 1.0         # LR VAE KL loss weight (simple, no compression)
     lr_kl_warmup_ep: float = 0.0    # linearly ramp KL weight from 0 to lr_vq_beta over the first N epochs; 0 disables warmup
     lr_posterior_log_limit: int = 10  # how many times to print posterior statistics for stage-1 debugging
-    lr_img_size: int = 80           # LR image size (80x80 -> 5x5 after 16x downsample)
+    lr_img_size: int = 64           # LR image size (64x64 -> 4x4 after 16x downsample)
     
     # Two-stage training control
     training_stage: int = 1         # 1: train LR VAE only; 2: train HR VAE with alignment
@@ -110,6 +110,7 @@ class Args(Tap):
     reconstruction_max_samples: int = 4      # Number of samples per comparison image
     reconstruction_dir_name: str = ''        # Override reconstruction output subdirectory when needed
     record_reconstruction_metadata: bool = True  # Save run metadata alongside reconstruction images
+    return_lr_original: bool = False         # Whether dataloader should return original-resolution LR for visualization
     
     warmup_ep: float = 0    # lr warmup: epochs
     wp0: float = 0.005      # lr warmup: initial lr ratio

@@ -75,9 +75,16 @@ def build_two_stage_trainer(args: arg_util.Args):
     print(f'global bs={args.bs}, local bs={args.lbs}')
     print(f'initial args:\n{str(args)}')
     [print(l) for l in auto_resume_info]
+    # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
+    args.patch_nums = tuple(int(x) for x in args.patch_nums)
 
     load_mode = 'lr_only' if args.training_stage == 1 else 'both'
-    dataset_train, dataset_val = build_lr_hr_dataset(args.data, load_mode=load_mode)
+    dataset_train, dataset_val = build_lr_hr_dataset(
+        args.data,
+        load_mode=load_mode,
+        lr_img_size=args.lr_img_size,
+        return_lr_original=args.return_lr_original,
+    )
     ld_train = DataLoader(
         dataset=dataset_train,
         num_workers=args.workers,
@@ -127,11 +134,12 @@ def build_two_stage_trainer(args: arg_util.Args):
 
     expected_lr_latent = args.lr_img_size // lr_vae_wo_ddp.downsample
     expected_hr_first_scale = args.patch_nums[0]
-    if expected_lr_latent != expected_hr_first_scale:
+    if args.training_stage == 2 and args.use_lr_hr_alignment and expected_lr_latent != expected_hr_first_scale:
         raise ValueError(
             f'Alignment requires lr_img_size / {lr_vae_wo_ddp.downsample} == patch_nums[0], '
             f'but got {args.lr_img_size} / {lr_vae_wo_ddp.downsample} = {expected_lr_latent} '
-            f'and patch_nums[0] = {expected_hr_first_scale}.'
+            f'and patch_nums[0] = {expected_hr_first_scale} '
+            f'(types: {type(expected_lr_latent).__name__} vs {type(expected_hr_first_scale).__name__}).'
         )
 
     optimizers: List[AmpOptimizer] = []
@@ -306,7 +314,10 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, args: arg_util.Args,
             continue
 
         if trainer.training_stage == 1:
-            batch = batch.to(args.device, non_blocking=True)
+            if isinstance(batch, (tuple, list)):
+                batch = tuple(x.to(args.device, non_blocking=True) for x in batch)
+            else:
+                batch = batch.to(args.device, non_blocking=True)
         else:
             batch = tuple(x.to(args.device, non_blocking=True) for x in batch)
 

@@ -332,6 +332,7 @@ class TwoStageVAETrainer(object):
         logging_params: bool,
         tb_lg: misc.TensorboardLogger,
         inp_lr: FTen,
+        inp_lr_gt: Optional[FTen],
         warmup_disc_schedule: float,
         fade_blur_schedule: float,
         maybe_record_function: Callable,
@@ -437,6 +438,7 @@ class TwoStageVAETrainer(object):
                     save_reconstruction_comparison(
                         original=inp_lr,
                         reconstructed=rec_for_vis,
+                        original_for_display=inp_lr_gt,
                         save_dir=save_dir,
                         ep=ep,
                         it=it,
@@ -601,7 +603,9 @@ class TwoStageVAETrainer(object):
         args: arg_util.Args,
     ) -> Tuple[Optional[torch.Tensor], Optional[float], Optional[torch.Tensor], Optional[float]]:
         if self.training_stage == 1:
-            if isinstance(inp, tuple):
+            inp_lr_gt = None
+            if isinstance(inp, (tuple, list)):
+                inp_lr_gt = inp[1] if len(inp) > 1 else None
                 inp = inp[0]
             return self.train_step_stage1(
                 ep=ep,
@@ -613,6 +617,7 @@ class TwoStageVAETrainer(object):
                 logging_params=logging_params,
                 tb_lg=tb_lg,
                 inp_lr=inp,
+                inp_lr_gt=inp_lr_gt,
                 warmup_disc_schedule=warmup_disc_schedule,
                 fade_blur_schedule=fade_blur_schedule,
                 maybe_record_function=maybe_record_function,
@@ -663,6 +668,8 @@ class TwoStageVAETrainer(object):
                 break
 
             if self.training_stage == 1:
+                if isinstance(batch, (tuple, list)):
+                    batch = batch[0]
                 inp = batch.to(next(eval_model.parameters()).device)
                 rec, _, _ = eval_model(inp)
             else:

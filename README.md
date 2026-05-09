@@ -10,13 +10,15 @@
 #   EXP_NAME=my_exp bash train.sh
 #   EXP_NOTE="my custom note" bash train.sh
 #   RECONSTRUCTION_DIR_NAME=my_recon_dir bash train.sh
+#   RETURN_LR_ORIGINAL=True bash train.sh   # stage1 可视化返回原分辨率 LR（默认 False）
 #   L1=0.3 bash train.sh
 #   LR_VQ_BETA=1e-4 LR_KL_WARMUP_EP=2.0 bash train.sh
 #   DATA=large STAGE=2 EXP_NAME=s2_try EXP_NOTE="stage2 test" RECONSTRUCTION_DIR_NAME=ep_test bash train.sh
 
-# DATA=large EXP_NAME=stage1_fix_init_issue EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization" RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue bash train.sh
+# stage1_fix_init_issue
+DATA=large EXP_NAME=stage1_fix_init_issue EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization" RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue bash train.sh
 
-# 
+# stage1_fix_init_issue_L1=1.0
 DATA=large \
 EXP_NAME=stage1_fix_init_issue_L1=1.0 \
 EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization + L1=1.0" \
@@ -24,7 +26,7 @@ RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue_L1=1.0 \
 L1=1.0 \
 bash train.sh
 
-# 
+# stage1_fix_init_issue_L1=1.0_KLweightDown
 DATA=large \
 EXP_NAME=stage1_fix_init_issue_L1=1.0_KLweightDown \
 EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization + L1=1.0 +KLweightDown" \
@@ -64,5 +66,8 @@ ps -ef | grep torchrun
 
 # lr_kl_warmup_ep
 # 可用 LR_KL_WARMUP_EP（或小写 lr_kl_warmup_ep）覆盖默认 --lr_kl_warmup_ep（默认 1.0）。
+
+# return_lr_original
+# 可用 RETURN_LR_ORIGINAL 控制 --return_lr_original（默认 False）。
 
 
