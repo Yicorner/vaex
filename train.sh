@@ -6,6 +6,7 @@ set -e
 #   STAGE=2 bash train.sh              # FEATURIZE，跑 stage 2
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
+#   VAL_AND_SAVING_PER_EP=5 bash train.sh   # 每 N epoch 验证与存 ckpt，默认 2（也可用 val_and_saving_per_ep）
 
 TRAIN_ENV=${TRAIN_ENV:-FEATURIZE}
 
@@ -63,6 +64,7 @@ HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
 L1_WEIGHT=${L1_WEIGHT:-${L1:-0.2}}
+VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
@@ -88,7 +90,7 @@ if [ "$STAGE" = "1" ]; then
   --training_stage=1 \
   --lbs=8 \
   --ep=100 \
-  --val_and_saving_per_ep=2 \
+  --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
@@ -120,7 +122,7 @@ elif [ "$STAGE" = "2" ]; then
   --lr_vae_resume="$STAGE1_CKPT" \
   --lbs=4 \
   --ep=150 \
-  --val_and_saving_per_ep=25 \
+  --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \

@@ -34,6 +34,18 @@ LR_VQ_BETA=1e-4 \
 LR_KL_WARMUP_EP=10.0 \
 bash train.sh
 
+#
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64 \
+EXP_NAME=stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath \
+EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization + L1=1.0 +KLweightDown + LR64DataPath" \
+RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath \
+L1=1.0 \
+LR_VQ_BETA=1e-4 \
+LR_KL_WARMUP_EP=10.0 \
+LR_FOLDER=LR_64x64 \
+VAL_AND_SAVING_PER_EP = 10 \
+bash train.sh
+
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 
