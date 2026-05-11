@@ -7,7 +7,6 @@ set -e
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 #   VAL_AND_SAVING_PER_EP=5 bash train.sh   # 每 N epoch 验证与存 ckpt，默认 2（也可用 val_and_saving_per_ep）
-#   PORT=13334 bash train.sh                # torchrun master_port（并行多任务时请指定不同 PORT）
 
 TRAIN_ENV=${TRAIN_ENV:-FEATURIZE}
 
@@ -29,12 +28,7 @@ esac
 export CUDA_VISIBLE_DEVICES=0
 
 STAGE=${STAGE:-1}
-# torch.distributed.elastic TCPStore 监听 master_port；固定默认端口会与并行训练冲突（EADDRINUSE）。
-# 未设置 PORT 时绑定 OS 分配的空闲端口；若需固定端口请显式传入（例如 PORT=13333）。
-if [ -z "${PORT:-}" ]; then
-  PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()' 2>/dev/null) || PORT=13333
-  echo "[train.sh] torchrun --master_port=$PORT (auto, set PORT=... to fix)"
-fi
+PORT=${PORT:-13333}
 
 # Choose dataset path without typing full path.
 # Priority:
@@ -75,7 +69,6 @@ VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
-TRAIN_LOG_POINTS_PER_EPOCH=${TRAIN_LOG_POINTS_PER_EPOCH:-${train_log_points_per_epoch:-40}}
 
 # 输出目录
 STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
