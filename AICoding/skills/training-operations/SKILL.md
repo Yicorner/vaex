@@ -58,6 +58,7 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `PATCH_NUMS` | `"5 6 8 10 13 16"` | 多尺度配置字符串，脚本内会拆成数组传给 `--patch_nums` |
 | `LR_IMG_SIZE` | `80` | 传给 `--lr_img_size`，需与 `patch_nums[0]` 对齐（`lr_img_size/16`） |
 | `STAGE1_CKPT` | `${STAGE1_BED}/ckpt-best.pth` | stage2 的 `--lr_vae_resume` 路径，可直接指向指定 stage1 checkpoint |
+| `TRAIN_LOG_POINTS_PER_EPOCH` | `40` | 控制每个 epoch 内 `[Ep]: [...]` 进度日志打印点数量；值越大打印越频繁 |
 
 ### 1.4 实验与训练
 
@@ -150,6 +151,7 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 - `dist.py` 对 `print()` 做了统一封装，输出默认带时间戳和文件位置信息。
 - stdout 备份文件：`local_output/backup1_stdout.txt`
 - TensorBoard 目录：`local_output/tb-{exp_name}__{config}/`
+- 可通过 `TRAIN_LOG_POINTS_PER_EPOCH`（映射到 `--train_log_points_per_epoch`）调节每 epoch 进度日志密度；`<=0` 使用旧的自动策略。
 
 ### 4.2 重建图输出
 

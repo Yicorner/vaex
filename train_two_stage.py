@@ -75,6 +75,8 @@ def build_two_stage_trainer(args: arg_util.Args):
     print(f'global bs={args.bs}, local bs={args.lbs}')
     print(f'initial args:\n{str(args)}')
     [print(l) for l in auto_resume_info]
+    # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
+    args.patch_nums = tuple(int(x) for x in args.patch_nums)
 
     load_mode = 'lr_only' if args.training_stage == 1 else 'both'
     dataset_train, dataset_val = build_lr_hr_dataset(
@@ -134,7 +136,8 @@ def build_two_stage_trainer(args: arg_util.Args):
         raise ValueError(
             f'Alignment requires lr_img_size / {lr_vae_wo_ddp.downsample} == patch_nums[0], '
             f'but got {args.lr_img_size} / {lr_vae_wo_ddp.downsample} = {expected_lr_latent} '
-            f'and patch_nums[0] = {expected_hr_first_scale}.'
+            f'and patch_nums[0] = {expected_hr_first_scale} '
+            f'(types: {type(expected_lr_latent).__name__} vs {type(expected_hr_first_scale).__name__}).'
         )
 
     optimizers: List[AmpOptimizer] = []
@@ -297,7 +300,14 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, args: arg_util.Args,
     speed_ls: deque = g_speed_ls
     FREQ = min(50, max(iters_train // 2 - 1, 1))
 
-    for it, batch in me.log_every(start_it, iters_train, ld_or_itrt, max(10, iters_train // 1000), header):
+    log_points_per_epoch = int(getattr(args, 'train_log_points_per_epoch', 0))
+    if log_points_per_epoch <= 0:
+        log_points_per_epoch = max(10, iters_train // 1000)
+    else:
+        # Keep this within a valid range for np.linspace's sample count.
+        log_points_per_epoch = max(2, min(log_points_per_epoch, iters_train))
+
+    for it, batch in me.log_every(start_it, iters_train, ld_or_itrt, log_points_per_epoch, header):
         if (it + 1) % FREQ == 0:
             speed_ls.append((time.perf_counter() - last_t_perf) / FREQ)
             args.iter_speed = float(np.median(speed_ls))
