@@ -53,9 +53,10 @@ DATA_PATH=${DATA_PATH:-$DEFAULT_DATA_PATH}
 LR_FOLDER=${LR_FOLDER:-${lr_folder:-LR}}
 HR_FOLDER=${HR_FOLDER:-${hr_folder:-HR}}
 
-# 训练配置
-PATCH_NUMS=(5 6 8 10 13 16)
-LR_IMG_SIZE=80
+# 训练配置（支持环境变量覆盖，便于不同数据配置复用）
+PATCH_NUMS_STR=${PATCH_NUMS:-${patch_nums:-"5 6 8 10 13 16"}}
+read -r -a PATCH_NUMS <<< "$PATCH_NUMS_STR"
+LR_IMG_SIZE=${LR_IMG_SIZE:-${lr_img_size:-80}}
 LR_CH=128
 LR_VOCAB_WIDTH=32
 LR_VQ_BETA=${LR_VQ_BETA:-${lr_vq_beta:-1e-3}}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
@@ -70,9 +71,9 @@ RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
 
 # 输出目录
-STAGE1_BED="myvaex_stage1_lr_vae"
-STAGE2_BED="myvaex_stage2_hr_aligned"
-STAGE1_CKPT="${STAGE1_BED}/ckpt-best.pth"
+STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
+STAGE2_BED=${STAGE2_BED:-myvaex_stage2_hr_aligned}
+STAGE1_CKPT=${STAGE1_CKPT:-${stage1_ckpt:-"${STAGE1_BED}/ckpt-best.pth"}}
 STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
 STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
 STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"

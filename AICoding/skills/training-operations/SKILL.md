@@ -49,6 +49,16 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 
 在 `train.sh` 中通过环境变量 `LR_FOLDER` / `HR_FOLDER` 覆盖，支持小写别名 `lr_folder` / `hr_folder`。
 
+### 1.3.6 `train.sh` 关键覆盖项
+
+除 `arg_util.py` 的 CLI 参数外，`train.sh` 还支持以下常用环境变量覆盖：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PATCH_NUMS` | `"5 6 8 10 13 16"` | 多尺度配置字符串，脚本内会拆成数组传给 `--patch_nums` |
+| `LR_IMG_SIZE` | `80` | 传给 `--lr_img_size`，需与 `patch_nums[0]` 对齐（`lr_img_size/16`） |
+| `STAGE1_CKPT` | `${STAGE1_BED}/ckpt-best.pth` | stage2 的 `--lr_vae_resume` 路径，可直接指向指定 stage1 checkpoint |
+
 ### 1.4 实验与训练
 
 | 参数 | 默认值 | 说明 |
