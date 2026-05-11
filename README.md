@@ -43,7 +43,7 @@ L1=1.0 \
 LR_VQ_BETA=1e-4 \
 LR_KL_WARMUP_EP=10.0 \
 LR_FOLDER=LR_64x64 \
-VAL_AND_SAVING_PER_EP = 10 \
+VAL_AND_SAVING_PER_EP=10 \
 bash train.sh
 
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
