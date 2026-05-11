@@ -14,7 +14,12 @@
 #   LR_VQ_BETA=1e-4 LR_KL_WARMUP_EP=2.0 bash train.sh
 #   DATA=large STAGE=2 EXP_NAME=s2_try EXP_NOTE="stage2 test" RECONSTRUCTION_DIR_NAME=ep_test bash train.sh
 
-# DATA=large EXP_NAME=stage1_fix_init_issue EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization" RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue bash train.sh
+# 
+DATA=large \
+EXP_NAME=stage1_fix_init_issue  \
+EXP_NOTE="fix: preserve mean_logvar_conv logvar initialization" \
+RECONSTRUCTION_DIR_NAME=stage1_fix_init_issue \
+bash train.sh
 
 # 
 DATA=large \
@@ -43,7 +48,7 @@ L1=1.0 \
 LR_VQ_BETA=1e-4 \
 LR_KL_WARMUP_EP=10.0 \
 LR_FOLDER=LR_64x64 \
-VAL_AND_SAVING_PER_EP = 10 \
+VAL_AND_SAVING_PER_EP=10 \
 bash train.sh
 
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
@@ -81,5 +86,23 @@ ps -ef | grep torchrun
 # 可用 LR_FOLDER（或小写 lr_folder）指定数据集中 LR 子目录名（默认 LR）。
 # 可用 HR_FOLDER（或小写 hr_folder）指定数据集中 HR 子目录名（默认 HR）。
 # 示例：LR_FOLDER=LR_64x64 bash train.sh
+
+# test
+python eval_stage1_ckpt.py \
+  --ckpt_path local_output/ckpt-3.pth \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test/LR \
+  --output_dir local_output/stage1_test_eval \
+  --num_samples 100 \
+  --seed 42 \
+  --batch_size 4
+
+# test
+python eval_stage1_ckpt.py \
+  --ckpt_path local_output/test/test_stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath/ckpt-9.pth \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64/test/LR_64x64 \
+  --output_dir local_output/test/test_stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath \
+  --num_samples 100 \
+  --seed 42 \
+  --batch_size 4
 
 

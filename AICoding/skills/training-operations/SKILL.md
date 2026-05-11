@@ -199,7 +199,7 @@ checkpoint 内容包含：
 ```bash
 python eval_stage1_ckpt.py \
   --ckpt_path local_output/ckpt-3.pth \
-  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test/LR \
   --output_dir local_output/stage1_test_eval \
   --num_samples 100 \
   --seed 42 \
