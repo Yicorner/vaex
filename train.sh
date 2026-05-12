@@ -69,6 +69,8 @@ VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
+USE_LR_HR_ALIGNMENT=${USE_LR_HR_ALIGNMENT:-${use_lr_hr_alignment:-True}}
+ALIGNMENT_LOSS_WEIGHT=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-1.0}}
 
 # 输出目录
 STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
@@ -76,8 +78,13 @@ STAGE2_BED=${STAGE2_BED:-myvaex_stage2_hr_aligned}
 STAGE1_CKPT=${STAGE1_CKPT:-${stage1_ckpt:-"${STAGE1_BED}/ckpt-best.pth"}}
 STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
 STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
-STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"
-STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with first-scale posterior mean alignment"
+if [ "$USE_LR_HR_ALIGNMENT" = "False" ] || [ "$USE_LR_HR_ALIGNMENT" = "false" ] || [ "$USE_LR_HR_ALIGNMENT" = "0" ]; then
+  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_no_alignment"
+  STAGE2_DEFAULT_EXP_NOTE="Stage 2 control: train HR multi-scale VAE on paired LR-HR loader without alignment loss"
+else
+  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"
+  STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with first-scale posterior mean alignment"
+fi
 
 if [ "$STAGE" = "1" ]; then
   EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE1_DEFAULT_EXP_NAME}}
@@ -119,8 +126,8 @@ elif [ "$STAGE" = "2" ]; then
   --lr_folder="$LR_FOLDER" \
   --hr_folder="$HR_FOLDER" \
   --training_stage=2 \
-  --use_lr_hr_alignment=True \
-  --alignment_loss_weight=1.0 \
+  --use_lr_hr_alignment="$USE_LR_HR_ALIGNMENT" \
+  --alignment_loss_weight="$ALIGNMENT_LOSS_WEIGHT" \
   --lr_vae_resume="$STAGE1_CKPT" \
   --lbs=4 \
   --ep=150 \

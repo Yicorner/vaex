@@ -59,6 +59,16 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `LR_IMG_SIZE` | `80` | 传给 `--lr_img_size`，需与 `patch_nums[0]` 对齐（`lr_img_size/16`） |
 | `STAGE1_CKPT` | `${STAGE1_BED}/ckpt-best.pth` | stage2 的 `--lr_vae_resume` 路径，可直接指向指定 stage1 checkpoint |
 | `TRAIN_LOG_POINTS_PER_EPOCH` | `40` | 控制每个 epoch 内 `[Ep]: [...]` 进度日志打印点数量；值越大打印越频繁 |
+| `USE_LR_HR_ALIGNMENT` | `True` | stage2 是否启用 LR-HR latent 对齐；设为 `False` 可做“paired loader + HR 重建”对照实验 |
+| `ALIGNMENT_LOSS_WEIGHT` | `1.0` | stage2 对齐损失权重，仅在 `USE_LR_HR_ALIGNMENT=True` 时影响训练 loss |
+
+stage2 关闭 alignment 的对照入口：
+
+```bash
+STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
+```
+
+该对照仍使用 paired loader，即每个 batch 返回 `(inp_lr, inp_hr)`，但 `trainer_two_stage.py` 不计算或加入 `L_align`，可用于隔离“LR-HR 数据加载/训练入口变化”和“alignment loss 本身”的影响。
 
 ### 1.4 实验与训练
 

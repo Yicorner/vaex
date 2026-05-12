@@ -33,6 +33,7 @@ DATA_PATH/
 | `training_stage=1` | 只训练 LR VAE，HR VAE 冻结 |
 | `training_stage=2` | 只训练 HR VAE，LR VAE 冻结 |
 | `use_lr_hr_alignment=True` | 在阶段 2 启用 5x5 latent 对齐损失 |
+| `use_lr_hr_alignment=False` | 阶段 2 仍使用 LR-HR paired loader，但只训练 HR 重建，不加入对齐损失 |
 | `alignment_loss_weight=1.0` | 对齐损失权重 |
 
 ### 2.1 Stage 1
@@ -73,6 +74,14 @@ L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
 ```
 
 这一约束的作用是让 HR 模型最粗粒度的 latent 语义对齐到 LR 模型已经学到的低分辨率语义底座。
+
+关闭 alignment 的 stage2 对照实验仍会加载 `(LR, HR)` 配对数据，但 loss 退化为 HR VAE 重建训练：
+
+```bash
+STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
+```
+
+这个实验用于判断问题来自 stage2 入口/paired 数据流程，还是来自 `L_align` 约束本身。
 
 ---
 
