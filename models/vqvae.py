@@ -59,29 +59,59 @@ class VQVAE(nn.Module):
             [p.requires_grad_(False) for p in self.parameters()]
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, inp, ret_usages=False):   # -> rec_B3HW, usages, kl_loss
+    def forward(
+        self,
+        inp,
+        ret_usages=False,
+        ret_scale_posterior_stats: bool = False,
+        scale_index: int = 0,
+    ):   # -> rec_B3HW, usages, kl_loss
         """
          for continuous multi-scale VAE training.
         
         Args:
             inp: input images [B, 3, H, W]
             ret_usages: whether to return usage statistics (kept for compatibility)
+            ret_scale_posterior_stats: whether to also return one scale's posterior mean/logvar
+            scale_index: index into `v_patch_nums` when returning posterior stats
         
         Returns:
             rec_B3HW: reconstructed images [B, 3, H, W]
             usages: usage statistics (None for continuous VAE)
             kl_loss: KL divergence loss
+            optional scale_mean, scale_logvar: posterior stats for alignment
         """
         # Encode, quantize (sample from Gaussian), and decode
-        f_encoded = self.encoder(inp)
-        f_hat, usages, kl_loss = self.quantize(
-            self.quant_conv(f_encoded), 
-            ret_usages=ret_usages
-        )
+        f = self.quant_conv(self.encoder(inp))
+        if ret_scale_posterior_stats:
+            scale_mean, scale_logvar = self.quantize.get_scale_posterior_stats(f, scale_index=scale_index)
+        f_hat, usages, kl_loss = self.quantize(f, ret_usages=ret_usages)
         rec_B3HW = self.decoder(self.post_quant_conv(f_hat))
+
+        if ret_scale_posterior_stats:
+            return rec_B3HW, usages, kl_loss, scale_mean, scale_logvar
         
         return rec_B3HW, usages, kl_loss
     # ===================== `forward` is only used in VAE training =====================
+
+    def forward_with_scale_posterior_stats(
+        self,
+        inp: torch.Tensor,
+        scale_index: int = 0,
+        ret_usages: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[List[float]], torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward once and expose one scale's posterior stats for alignment.
+
+        This avoids a second HR encoder pass in stage 2 alignment while keeping
+        the regular reconstruction/KL path identical to `forward()`.
+        """
+        return self.forward(
+            inp,
+            ret_usages=ret_usages,
+            ret_scale_posterior_stats=True,
+            scale_index=scale_index,
+        )
     
     def fhat_to_img(self, f_hat: torch.Tensor):
         return self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1)

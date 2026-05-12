@@ -306,11 +306,9 @@ class TwoStageVAETrainer(object):
         )
         self._lr_posterior_log_printed += 1
 
-    def _get_alignment_targets(self, inp_lr: torch.Tensor, inp_hr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_alignment_targets(self, inp_lr: torch.Tensor, hr_mean: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         with torch.no_grad():
             lr_mean = self.lr_vae_wo_ddp.encode_to_posterior_mean(inp_lr)
-
-        hr_mean, _ = self.vae_wo_ddp.img_to_scale_posterior_stats(inp_hr, scale_index=self.alignment_scale_index)
 
         if hr_mean.shape != lr_mean.shape:
             raise ValueError(
@@ -471,7 +469,16 @@ class TwoStageVAETrainer(object):
 
         with maybe_record_function('HR_VAE_rec'):
             with self.vae_opt.amp_ctx:
-                rec_B3HW, usage, Lkl = self.vae(inp_hr, ret_usages=loggable)
+                if self.use_alignment_loss:
+                    rec_B3HW, usage, Lkl, hr_mean, _ = self.vae(
+                        inp_hr,
+                        ret_usages=loggable,
+                        ret_scale_posterior_stats=True,
+                        scale_index=self.alignment_scale_index,
+                    )
+                else:
+                    rec_B3HW, usage, Lkl = self.vae(inp_hr, ret_usages=loggable)
+                    hr_mean = None
                 self._assert_finite('rec_B3HW', rec_B3HW, ep, it, 'stage2')
                 self._assert_finite('Lkl', Lkl, ep, it, 'stage2')
                 if loggable and usage is not None:
@@ -494,7 +501,7 @@ class TwoStageVAETrainer(object):
                     Lnll = Lrec
 
                 if self.use_alignment_loss:
-                    lr_mean, hr_mean = self._get_alignment_targets(inp_lr, inp_hr)
+                    lr_mean, hr_mean = self._get_alignment_targets(inp_lr, hr_mean)
                     L_align = F.mse_loss(hr_mean, lr_mean)
                 else:
                     L_align = inp_hr.new_zeros(())
@@ -669,13 +676,17 @@ class TwoStageVAETrainer(object):
                 inp_lr, inp_hr = batch
                 inp_lr = inp_lr.to(next(lr_eval_model.parameters()).device)
                 inp_hr = inp_hr.to(next(eval_model.parameters()).device)
-                rec, _, _ = eval_model(inp_hr)
                 inp = inp_hr
 
                 if self.use_alignment_loss:
+                    rec, _, _, hr_mean, _ = eval_model.forward_with_scale_posterior_stats(
+                        inp_hr,
+                        scale_index=self.alignment_scale_index,
+                    )
                     lr_mean = lr_eval_model.encode_to_posterior_mean(inp_lr)
-                    hr_mean, _ = eval_model.img_to_scale_posterior_stats(inp_hr, scale_index=self.alignment_scale_index)
                     align_loss_sum += F.mse_loss(hr_mean, lr_mean).item() * inp.shape[0]
+                else:
+                    rec, _, _ = eval_model(inp_hr)
 
             rec_loss += F.l1_loss(rec, inp, reduction='sum').item()
             inp_np = inp.cpu().numpy()

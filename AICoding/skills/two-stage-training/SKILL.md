@@ -75,6 +75,8 @@ L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
 
 这一约束的作用是让 HR 模型最粗粒度的 latent 语义对齐到 LR 模型已经学到的低分辨率语义底座。
 
+性能约束：stage2 训练时必须复用 HR 主 forward 已经算出的 encoder feature 来取得 `hr_f_5x5_mean`，不要在 loss 中再次调用 `img_to_scale_posterior_stats(inp_hr)` 之类会二次执行 HR encoder 的路径。当前推荐入口是 `VQVAE.forward(..., ret_scale_posterior_stats=True, scale_index=0)` 或 `forward_with_scale_posterior_stats()`。
+
 关闭 alignment 的 stage2 对照实验仍会加载 `(LR, HR)` 配对数据，但 loss 退化为 HR VAE 重建训练：
 
 ```bash

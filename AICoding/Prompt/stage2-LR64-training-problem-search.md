@@ -40,3 +40,6 @@ thank you！I believe you can.
 3.这个就不用改了，我很确信不是这个问题，因为如果这里改成和a一样，那么要1个多小时才会打印一条日志，我等不起，而且second/iters明显和这个无关，我100%确定。
 
 PS:服务器是linux，本机是windows，本地代码跑不起来没关系，你也不用跑。
+
+# round 3
+好了，这下真相大白了，我现在alignment = false，结果如下，@backup1_stdout.txt (42501-42516) ，和刚刚的@backup1_stdout.txt (41239-41291) 训练过程b相比，快了感觉有个10倍，why？我是不是代码写错了？还是说就是会这么慢这是合理的？
