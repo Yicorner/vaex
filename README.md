@@ -66,6 +66,23 @@ VAL_AND_SAVING_PER_EP=1 \
 TRAIN_LOG_POINTS_PER_EPOCH=200 \
 bash train.sh
 
+# stage2 (LR_64x64 + HR), patch_nums 不与 stage1 latent 对齐（与前一次训练对比，为什么速度这么慢？）
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64 \
+STAGE=2 \
+EXP_NAME=stage2_from_stage1_ckpt9_lr64_patch4to16_wo_Alignment \
+EXP_NOTE="stage2 with LR_64x64, align first scale 4x4 to stage1 latent without Alignment" \
+RECONSTRUCTION_DIR_NAME=stage2_from_stage1_ckpt9_lr64_patch4to16_wo_Alignment \
+STAGE1_CKPT=local_output/test/test_stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath/ckpt-9.pth \
+LR_FOLDER=LR_64x64 \
+HR_FOLDER=HR \
+LR_IMG_SIZE=64 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=200 \
+USE_LR_HR_ALIGNMENT=False \
+STAGE2_EP=2 \
+bash train.sh
+
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 

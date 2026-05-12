@@ -7,6 +7,8 @@ set -e
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 #   VAL_AND_SAVING_PER_EP=5 bash train.sh   # 每 N epoch 验证与存 ckpt，默认 2（也可用 val_and_saving_per_ep）
+#   EP=80 bash train.sh                     # 两阶段训练 epoch 数（也可用 ep）；stage 默认 100 / 150
+#   STAGE1_EP=120 bash train.sh             # 仅 stage 1；stage2 用 STAGE2_EP（或 stage1_ep / stage2_ep）
 
 TRAIN_ENV=${TRAIN_ENV:-FEATURIZE}
 
@@ -65,6 +67,10 @@ HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
 L1_WEIGHT=${L1_WEIGHT:-${L1:-0.2}}
+# Epochs: STAGE1_EP / STAGE2_EP（或 stage1_ep / stage2_ep）优先；否则用 EP / ep；再否则 stage 默认 100 / 150
+STAGE1_EP=${STAGE1_EP:-${stage1_ep:-}}
+STAGE2_EP=${STAGE2_EP:-${stage2_ep:-}}
+EP_COMMON=${EP:-${ep:-}}
 VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
@@ -97,7 +103,7 @@ if [ "$STAGE" = "1" ]; then
   --hr_folder="$HR_FOLDER" \
   --training_stage=1 \
   --lbs=8 \
-  --ep=100 \
+  --ep="${STAGE1_EP:-${EP_COMMON:-100}}" \
   --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
   --lr_ch="$LR_CH" \
@@ -130,7 +136,7 @@ elif [ "$STAGE" = "2" ]; then
   --alignment_loss_weight="$ALIGNMENT_LOSS_WEIGHT" \
   --lr_vae_resume="$STAGE1_CKPT" \
   --lbs=4 \
-  --ep=150 \
+  --ep="${STAGE2_EP:-${EP_COMMON:-150}}" \
   --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
   --lr_ch="$LR_CH" \
