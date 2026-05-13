@@ -132,7 +132,7 @@ def build_two_stage_trainer(args: arg_util.Args):
 
     expected_lr_latent = args.lr_img_size // lr_vae_wo_ddp.downsample
     expected_hr_first_scale = args.patch_nums[0]
-    if expected_lr_latent != expected_hr_first_scale:
+    if expected_lr_latent != expected_hr_first_scale and args.use_lr_hr_alignment:
         raise ValueError(
             f'Alignment requires lr_img_size / {lr_vae_wo_ddp.downsample} == patch_nums[0], '
             f'but got {args.lr_img_size} / {lr_vae_wo_ddp.downsample} = {expected_lr_latent} '

@@ -118,6 +118,23 @@ USE_LR_HR_ALIGNMENT=True \
 STAGE2_EP=3 \
 bash train.sh
 
+# stage2 (LR_64x64 + HR), patch_nums 不与 stage1 latent 对齐 (第二次训练看看训练3个epoch效果怎么样和上面的相比)
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64 \
+STAGE=2 \
+EXP_NAME=stage2_from_stage1_ckpt9_lr64_patch4to16_no_Alignment_1 \
+EXP_NOTE="stage2 with LR_64x64, align first scale 4x4 to stage1 latent without new Alignment_1" \
+RECONSTRUCTION_DIR_NAME=stage2_from_stage1_ckpt9_lr64_patch4to16_no_Alignment_1 \
+STAGE1_CKPT=local_output/test/test_stage1_fix_init_issue_L1=1.0_KLweightDown_LR64DataPath/ckpt-9.pth \
+LR_FOLDER=LR_64x64 \
+HR_FOLDER=HR \
+LR_IMG_SIZE=64 \
+PATCH_NUMS="1 2 3 4 5 6 8 10 13 16" \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=0 \
+USE_LR_HR_ALIGNMENT=False \
+STAGE2_EP=3 \
+bash train.sh
+
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 
