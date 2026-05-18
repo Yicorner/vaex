@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Evaluate a stage-2 HR VAE checkpoint on a single image folder.
+
+Outputs:
+- per-image PSNR / SSIM CSV
+- summary JSON + text log
+- reconstruction comparisons in 4x2 layout (GT | Pred)
+- single-image predictions
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import random
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
+
+import numpy as np
+import torch
+from PIL import Image
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from torchvision import transforms
+
+from models.vqvae import VQVAE
+from utils.image_saver import denormalize_image, save_reconstruction_comparison, tensor_to_pil_image
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate stage-2 HR VAE checkpoint on one image folder.")
+    parser.add_argument("--ckpt_path", type=Path, required=True, help="Path to stage-2 checkpoint (e.g., local_output/ckpt-2.pth).")
+    parser.add_argument("--test_dir", type=Path, required=True, help="Folder containing HR images to test (direct children).")
+    parser.add_argument("--output_dir", type=Path, required=True, help="Where logs and images are written.")
+    parser.add_argument("--num_samples", type=int, default=100, help="Number of random images to evaluate.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling.")
+    parser.add_argument("--batch_size", type=int, default=4, help="Inference batch size and comparison grid rows.")
+    parser.add_argument("--device", type=str, default="auto", help="cuda | cpu | auto")
+    parser.add_argument("--ch", type=int, default=None, help="Optional override. Defaults to ckpt args.ch or 160.")
+    parser.add_argument("--vocab_width", type=int, default=None, help="Optional override. Defaults to ckpt args.vocab_width or 32.")
+    parser.add_argument("--vocab_size", type=int, default=None, help="Optional override. Defaults to ckpt args.vocab_size or 4096.")
+    parser.add_argument("--share_quant_resi", type=int, default=None, help="Optional override. Defaults to ckpt args.share_quant_resi or 4.")
+    parser.add_argument(
+        "--patch_nums",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional override for multi-scale patch counts, e.g. --patch_nums 4 5 6 8 10 13 16.",
+    )
+    parser.add_argument(
+        "--debug_kl_count_limit",
+        type=int,
+        default=None,
+        help="Optional override. Defaults to ckpt args.debug_kl_count_limit or 3.",
+    )
+    return parser.parse_args()
+
+
+def resolve_device(raw: str) -> torch.device:
+    if raw == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(raw)
+
+
+def list_images(folder: Path) -> Dict[str, Path]:
+    if not folder.exists():
+        raise FileNotFoundError(f"Folder not found: {folder}")
+    paths = {}
+    for p in sorted(folder.iterdir()):
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+            paths[p.stem] = p
+    return paths
+
+
+def sample_images(img_map: Dict[str, Path], n: int, seed: int) -> List[Path]:
+    paths = list(img_map.values())
+    if n <= 0:
+        raise ValueError("--num_samples must be > 0.")
+    if n > len(paths):
+        raise ValueError(f"Requested {n} samples, but only {len(paths)} images are available.")
+    rng = random.Random(seed)
+    indices = list(range(len(paths)))
+    rng.shuffle(indices)
+    return [paths[i] for i in indices[:n]]
+
+
+def to_pm1_tensor(pil_img: Image.Image) -> torch.Tensor:
+    tensor = transforms.ToTensor()(pil_img)  # [0, 1]
+    return tensor.add(tensor).add_(-1.0)  # [-1, 1]
+
+
+def load_ckpt(ckpt_path: Path) -> dict:
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    return torch.load(str(ckpt_path), map_location="cpu")
+
+
+def read_ckpt_arg(ckpt: dict, key: str, default):
+    args = ckpt.get("args", {})
+    if isinstance(args, dict):
+        return args.get(key, default)
+    return default
+
+
+def normalize_patch_nums(raw) -> Tuple[int, ...]:
+    if raw is None:
+        return (5, 6, 8, 10, 13, 16)
+    if isinstance(raw, str):
+        return tuple(int(x) for x in raw.replace(",", " ").split())
+    return tuple(int(x) for x in raw)
+
+
+def extract_hr_state_dict(ckpt: dict) -> dict:
+    trainer = ckpt.get("trainer", {})
+    if isinstance(trainer, dict):
+        for k in ("vae_ema", "vae_wo_ddp"):
+            state = trainer.get(k)
+            if isinstance(state, dict):
+                return state
+    for k in ("vae_ema", "vae_wo_ddp", "state_dict"):
+        state = ckpt.get(k)
+        if isinstance(state, dict):
+            return state
+    raise KeyError("Could not locate HR VAE weights in checkpoint.")
+
+
+def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.device) -> VQVAE:
+    ch = args.ch if args.ch is not None else int(read_ckpt_arg(ckpt, "ch", 160))
+    vocab_width = args.vocab_width if args.vocab_width is not None else int(read_ckpt_arg(ckpt, "vocab_width", 32))
+    vocab_size = args.vocab_size if args.vocab_size is not None else int(read_ckpt_arg(ckpt, "vocab_size", 4096))
+    share_quant_resi = (
+        args.share_quant_resi
+        if args.share_quant_resi is not None
+        else int(read_ckpt_arg(ckpt, "share_quant_resi", 4))
+    )
+    if args.patch_nums is not None:
+        patch_nums = tuple(int(x) for x in args.patch_nums)
+    else:
+        patch_nums = normalize_patch_nums(read_ckpt_arg(ckpt, "patch_nums", None))
+    debug_kl_count_limit = (
+        args.debug_kl_count_limit
+        if args.debug_kl_count_limit is not None
+        else int(read_ckpt_arg(ckpt, "debug_kl_count_limit", 3))
+    )
+
+    model = VQVAE(
+        vocab_size=vocab_size,
+        z_channels=vocab_width,
+        ch=ch,
+        test_mode=True,
+        share_quant_resi=share_quant_resi,
+        v_patch_nums=patch_nums,
+        debug_kl_count_limit=debug_kl_count_limit,
+    ).to(device)
+    state = extract_hr_state_dict(ckpt)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        print(f"[ckpt load] missing={len(missing)}, unexpected={len(unexpected)}")
+    model.eval()
+    return model
+
+
+def batch_iter(items: Sequence[Path], batch_size: int) -> Iterable[Sequence[Path]]:
+    for i in range(0, len(items), batch_size):
+        yield items[i:i + batch_size]
+
+
+def to_img_np_01(t: torch.Tensor) -> np.ndarray:
+    # t: [C, H, W] in [-1, 1]
+    arr = ((t.detach().cpu().numpy() + 1.0) / 2.0).clip(0.0, 1.0)
+    return np.transpose(arr, (1, 2, 0))
+
+
+def evaluate(
+    model: VQVAE,
+    samples: Sequence[Path],
+    output_dir: Path,
+    batch_size: int,
+    device: torch.device,
+) -> Dict[str, float]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    comparisons_dir = output_dir / "comparisons"
+    predictions_dir = output_dir / "predictions"
+    comparisons_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+
+    per_image_csv = output_dir / "metrics_per_image.csv"
+    metrics_log = output_dir / "metrics.log"
+    sampled_list_path = output_dir / "sampled_files.txt"
+
+    rows: List[Dict[str, float]] = []
+    sampled_lines: List[str] = []
+    comp_idx = 0
+
+    with torch.no_grad():
+        for chunk in batch_iter(samples, batch_size):
+            inp_tensors = []
+            keys: List[str] = []
+            for img_path in chunk:
+                img = Image.open(img_path).convert("RGB")
+                inp_tensors.append(to_pm1_tensor(img))
+                keys.append(img_path.stem)
+                sampled_lines.append(str(img_path))
+
+            inp_batch = torch.stack(inp_tensors, dim=0)
+            pred_batch, _, _ = model(inp_batch.to(device, non_blocking=True))
+            pred_batch = pred_batch.detach().cpu().clamp(-1, 1)
+
+            save_reconstruction_comparison(
+                original=inp_batch,
+                reconstructed=pred_batch,
+                save_dir=str(comparisons_dir),
+                ep=0,
+                it=comp_idx,
+                max_samples=min(4, len(chunk)),
+            )
+            comp_idx += 1
+
+            pred_denorm = denormalize_image(pred_batch.clone())  # [0, 1]
+            for idx, key in enumerate(keys):
+                gt_np = to_img_np_01(inp_batch[idx])
+                pred_np = np.transpose(pred_denorm[idx].numpy(), (1, 2, 0))
+
+                cur_psnr = float(peak_signal_noise_ratio(gt_np, pred_np, data_range=1.0))
+                cur_ssim = float(structural_similarity(gt_np, pred_np, channel_axis=2, data_range=1.0))
+                rows.append({"key": key, "psnr": cur_psnr, "ssim": cur_ssim})
+
+                pred_img = tensor_to_pil_image(pred_denorm[idx])
+                pred_img.save(predictions_dir / f"{key}_pred.png")
+
+    with sampled_list_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(sampled_lines) + "\n")
+
+    with per_image_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["index", "key", "psnr", "ssim"])
+        for i, row in enumerate(rows):
+            writer.writerow([i, row["key"], f'{row["psnr"]:.6f}', f'{row["ssim"]:.6f}'])
+
+    psnr_vals = [row["psnr"] for row in rows]
+    ssim_vals = [row["ssim"] for row in rows]
+    summary = {
+        "num_samples": len(rows),
+        "psnr_mean": float(np.mean(psnr_vals)),
+        "psnr_std": float(np.std(psnr_vals)),
+        "psnr_min": float(np.min(psnr_vals)),
+        "psnr_max": float(np.max(psnr_vals)),
+        "ssim_mean": float(np.mean(ssim_vals)),
+        "ssim_std": float(np.std(ssim_vals)),
+        "ssim_min": float(np.min(ssim_vals)),
+        "ssim_max": float(np.max(ssim_vals)),
+        "comparison_layout": "4 rows x 2 cols (GT | Pred), batched by up to 4 samples per image",
+        "comparison_images": int(math.ceil(len(rows) / max(1, batch_size))),
+        "prediction_images": len(rows),
+    }
+
+    with (output_dir / "metrics_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=True)
+
+    with metrics_log.open("w", encoding="utf-8") as f:
+        f.write(f"num_samples={summary['num_samples']}\n")
+        f.write(f"PSNR mean/std/min/max = {summary['psnr_mean']:.6f} / {summary['psnr_std']:.6f} / {summary['psnr_min']:.6f} / {summary['psnr_max']:.6f}\n")
+        f.write(f"SSIM mean/std/min/max = {summary['ssim_mean']:.6f} / {summary['ssim_std']:.6f} / {summary['ssim_min']:.6f} / {summary['ssim_max']:.6f}\n")
+        f.write(f"comparisons_dir={comparisons_dir}\n")
+        f.write(f"predictions_dir={predictions_dir}\n")
+        f.write(f"per_image_csv={per_image_csv}\n")
+        f.write(f"sampled_files={sampled_list_path}\n")
+
+    return summary
+
+
+def main() -> None:
+    args = parse_args()
+    device = resolve_device(args.device)
+
+    image_map = list_images(args.test_dir)
+    chosen_images = sample_images(image_map, args.num_samples, args.seed)
+
+    ckpt = load_ckpt(args.ckpt_path)
+    model = build_model_from_ckpt(ckpt, args, device)
+
+    summary = evaluate(
+        model=model,
+        samples=chosen_images,
+        output_dir=args.output_dir,
+        batch_size=max(1, args.batch_size),
+        device=device,
+    )
+
+    print(
+        f"[done] samples={summary['num_samples']}, "
+        f"PSNR={summary['psnr_mean']:.4f}, SSIM={summary['ssim_mean']:.4f}, "
+        f"output_dir={args.output_dir}"
+    )
+
+
+if __name__ == "__main__":
+    main()

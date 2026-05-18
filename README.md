@@ -189,4 +189,13 @@ python eval_stage1_ckpt.py \
   --seed 42 \
   --batch_size 4
 
+# test
+python eval_stage2_ckpt.py \
+  --ckpt_path local_output/test/test_stage2_with_alignment_epoch3/ckpt-2.pth \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64/test/HR \
+  --output_dir local_output/test/test_stage2_with_alignment_epoch3 \
+  --num_samples 100 \
+  --seed 42 \
+  --batch_size 4
+
 
