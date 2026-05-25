@@ -39,7 +39,7 @@ description: Route readers to the correct repository skill before they dive into
 适合回答：
 
 - stage 1 和 stage 2 分别训练什么
-- LR `5x5` latent 为什么重要
+- stage2 当前 scale0 图像空间对齐如何替代旧的 LR `5x5` latent 对齐
 - HR-LR 对齐损失是怎么接进训练流程的
 - 修改训练阶段逻辑时要同步检查什么
 

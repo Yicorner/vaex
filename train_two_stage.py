@@ -77,6 +77,7 @@ def build_two_stage_trainer(args: arg_util.Args):
     [print(l) for l in auto_resume_info]
     # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
+    args.alignment_loss_type = TwoStageVAETrainer._normalize_alignment_loss_type(args.alignment_loss_type)
 
     load_mode = 'lr_only' if args.training_stage == 1 else 'both'
     dataset_train, dataset_val = build_lr_hr_dataset(
@@ -132,13 +133,20 @@ def build_two_stage_trainer(args: arg_util.Args):
 
     expected_lr_latent = args.lr_img_size // lr_vae_wo_ddp.downsample
     expected_hr_first_scale = args.patch_nums[0]
-    if expected_lr_latent != expected_hr_first_scale and args.use_lr_hr_alignment:
+    if expected_lr_latent != expected_hr_first_scale and args.use_lr_hr_alignment and args.alignment_loss_type == 'latent':
         raise ValueError(
-            f'Alignment requires lr_img_size / {lr_vae_wo_ddp.downsample} == patch_nums[0], '
+            f'Legacy latent alignment requires lr_img_size / {lr_vae_wo_ddp.downsample} == patch_nums[0], '
             f'but got {args.lr_img_size} / {lr_vae_wo_ddp.downsample} = {expected_lr_latent} '
             f'and patch_nums[0] = {expected_hr_first_scale} '
             f'(types: {type(expected_lr_latent).__name__} vs {type(expected_hr_first_scale).__name__}).'
         )
+    if args.training_stage == 2:
+        print(
+            f'[alignment] enabled={args.use_lr_hr_alignment}, type={args.alignment_loss_type}, '
+            f'weight={args.alignment_loss_weight}, warmup_ep={args.alignment_loss_warmup_ep}'
+        )
+        if args.use_lr_hr_alignment and args.alignment_loss_type == 'scale0_image':
+            print('[alignment] scale0_image decodes HR scale[0] and compares it to resized LR pixels; stage1 LR latent is not required.')
 
     optimizers: List[AmpOptimizer] = []
     optimizer_specs = [
@@ -227,7 +235,9 @@ def build_two_stage_trainer(args: arg_util.Args):
         disc_grad_ckpt=args.disc_grad_ckpt,
         training_stage=args.training_stage,
         use_alignment_loss=args.use_lr_hr_alignment,
+        alignment_loss_type=args.alignment_loss_type,
         alignment_loss_weight=args.alignment_loss_weight,
+        alignment_loss_warmup_ep=args.alignment_loss_warmup_ep,
         alignment_scale_index=0,
         dbg_unused=args.dbg_unused,
         dbg_nan=args.dbg_nan,
@@ -281,7 +291,7 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, args: arg_util.Args,
     me = misc.MetricLogger(delimiter='  ')
     [me.add_meter(x, misc.SmoothedValue(window_size=1, fmt='{value:.2g}')) for x in ['glr', 'dlr']]
     [me.add_meter(x, misc.SmoothedValue(window_size=1, fmt='{median:.2f} ({global_avg:.2f})')) for x in ['gnm', 'dnm']]
-    for l in ['L1', 'NLL', 'Ld', 'Wg', 'L_align']:
+    for l in ['L1', 'NLL', 'Ld', 'Wg', 'L_align', 'W_align']:
         me.add_meter(l, misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
     me.add_meter("usage", misc.SmoothedValue(fmt='{median:.2f} ({global_avg:.2f})'))
     me.add_meter("Lkl", misc.SmoothedValue(fmt='{median:.2e} ({global_avg:.2e})'))
@@ -422,7 +432,16 @@ def main_training():
         args.remain_time, args.finish_time = remain_time, finish_time
 
         print(f'  [*] [ep{ep}] Remain: {remain_time}, Finish: {finish_time}')
-        tb_lg.update(head='PT_ep_loss', step=ep + 1, L1rec=L1, Lnll=Lnll, Ld=Ld, wei_g=wei_g, L_align=stats.get('L_align', 0.0))
+        tb_lg.update(
+            head='PT_ep_loss',
+            step=ep + 1,
+            L1rec=L1,
+            Lnll=Lnll,
+            Ld=Ld,
+            wei_g=wei_g,
+            L_align=stats.get('L_align', 0.0),
+            W_align=stats.get('W_align', 0.0),
+        )
         tb_lg.update(head='PT_z_burnout', step=ep + 1, rest_hours=round(sec / 60 / 60, 2))
 
         is_val_and_also_saving = (ep + 1) % args.val_and_saving_per_ep == 0 or (ep + 1) == args.ep

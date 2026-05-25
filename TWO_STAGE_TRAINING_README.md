@@ -5,7 +5,7 @@
 本项目实现了用于图像超分辨率的两阶段VAE训练方案：
 
 - **阶段1**：训练单尺度LR VAE，将低分辨率图像编码为 5×5 tokens
-- **阶段2**：训练多尺度HR VAE，将高分辨率图像编码为多尺度tokens (5×5, 6×6, 8×8, ..., 16×16)，并与LR的5×5对齐
+- **阶段2**：训练多尺度HR VAE，将高分辨率图像编码为多尺度tokens (scale0, ..., 16×16)。当前默认让 scale0 解码图像与 LR 图像对齐，不再依赖 stage1 LR latent
 
 ## 数据集结构
 
@@ -52,35 +52,37 @@ torchrun --nproc_per_node=1 train.py \
 - `lr_vocab_width=32`：LR VAE的潜在维度
 - `lr_vq_beta=1.0`：KL loss权重（简单版本，不压缩）
 
-### 阶段2：训练HR VAE with Alignment
+### 阶段2：训练HR VAE with Scale0 Image Alignment
 
-目标：训练多尺度HR VAE，并使其第一层(5×5)与LR VAE对齐
+目标：训练多尺度HR VAE，并使其第一层 scale0 通过 HR 共享 decoder 解码后接近 LR 图像（LR 会 resize 到 decoder 输出尺寸，通常为 256×256）。
 
 ```bash
-torchrun --nproc_per_node=1 train.py \
+torchrun --nproc_per_node=1 train_two_stage.py \
   --exp_name="stage2_hr_vae" \
   --bed="output/stage2" \
-  --exp_note="阶段2：训练HR VAE with LR-HR对齐" \
+  --exp_note="阶段2：训练HR VAE with scale0 image alignment" \
   --data="path/to/data" \
   --training_stage=2 \
   --use_lr_hr_alignment=True \
-  --alignment_loss_weight=1.0 \
+  --alignment_loss_type=scale0_image \
+  --alignment_loss_weight=0.5 \
+  --alignment_loss_warmup_ep=0 \
   --patch_nums 5 6 8 10 13 16 \
   --vocab_width=32 \
   --lbs=4 \
   --vae_lr=1e-4 \
   --disc_lr=1e-4 \
   --ep=150 \
-  --val_and_saving_per_ep=5 \
-  --resume="output/stage1/ckpt-best.pth"
+  --val_and_saving_per_ep=5
 ```
 
 **关键参数**：
 - `training_stage=2`：设置为阶段2
-- `use_lr_hr_alignment=True`：启用LR-HR对齐loss
-- `alignment_loss_weight=1.0`：对齐loss的权重
-- `patch_nums 5 6 8 10 13 16`：多尺度配置（注意第一个必须是5）
-- `resume="..."`：加载阶段1训练好的LR VAE checkpoint
+- `use_lr_hr_alignment=True`：启用 scale0 辅助对齐 loss
+- `alignment_loss_type=scale0_image`：默认新路径，不依赖 stage1 latent
+- `alignment_loss_weight=0.5`：scale0 图像 loss 权重
+- `patch_nums 5 6 8 10 13 16`：多尺度配置；若使用 LR_64x64，可用 `4 5 6 8 10 13 16`
+- `lr_vae_resume`：只有 `alignment_loss_type=latent` 的旧路径才需要
 
 ## 模型架构
 
@@ -96,24 +98,26 @@ torchrun --nproc_per_node=1 train.py \
 - 编码器：5层下采样 → [B, C, 16, 16]
 - 多尺度量化：5×5, 6×6, 8×8, 10×10, 13×13, 16×16
 - 解码器：5层上采样 → [B, 3, 256, 256]
-- Loss：KL loss + 重建loss + 对抗loss + **对齐loss**
+- Loss：KL loss + 重建loss + 对抗loss + **scale0 图像对齐loss**
 
 ### 对齐Loss
 
-在阶段2中，HR VAE的第一个尺度(5×5)会与LR VAE的5×5对齐：
+在阶段2中，默认把 HR VAE 的第一个尺度通过共享 decoder 解码为图像，再与 LR 图像做 L1：
 
 ```python
-L_align = MSE(HR_5x5_mean, LR_5x5)
+scale0_img = DecodeStage2Scale0(HR_scale0_mean)
+lr_img_target = Resize(LR_image, scale0_img.shape[-2:])
+L_align = L1(scale0_img, lr_img_target)
 ```
 
-这确保了HR VAE学到的第一层表示与LR VAE一致，为后续超分辨率任务打下基础。
+这让 scale0 学低频/LR 结构，同时避免把 stage2 latent 强行拉到 stage1 LR VAE 的 latent 分布。旧版 latent 对齐仍可用 `--alignment_loss_type=latent --lr_vae_resume=...` 复现。
 
 ## 重要提示
 
 1. **数据配对**：LR和HR图像应该一一对应（文件名匹配）
 2. **分辨率**：LR建议80×80，HR建议256×256（可根据需求调整）
 3. **阶段顺序**：必须先完成阶段1再进行阶段2
-4. **Checkpoint**：阶段2需要加载阶段1的checkpoint
+4. **Checkpoint**：默认 stage2 图像空间对齐不需要阶段1 checkpoint；只有 legacy latent 对齐需要
 5. **冻结策略**：
    - 阶段1：LR VAE训练，HR VAE冻结
    - 阶段2：HR VAE训练，LR VAE冻结
@@ -122,7 +126,7 @@ L_align = MSE(HR_5x5_mean, LR_5x5)
 
 关键指标：
 - **阶段1**：`L_rec`（重建损失），`PSNR`，`SSIM`，`Lkl`（KL散度）
-- **阶段2**：上述指标 + `L_align`（对齐损失）
+- **阶段2**：上述指标 + `L_align`（scale0 图像对齐损失或 legacy latent 对齐损失）
 
 可视化：
 - TensorBoard日志：`local_output/tb-*/`
@@ -143,9 +147,9 @@ L_align = MSE(HR_5x5_mean, LR_5x5)
 **Q: 为什么LR图像是80×80？**  
 A: 80×80经过16倍下采样（2^4）刚好得到5×5。如果要改变尺度，需要保持 `lr_img_size / 16 = 第一个patch_num`。
 
-**Q: 可以跳过阶段1直接训练阶段2吗？**  
-A: 不建议。阶段1为阶段2提供了预训练的LR表示，有助于对齐loss的收敛。
+**Q: 可以跳过阶段1直接训练阶段2吗？**
+A: 当前默认可以。`alignment_loss_type=scale0_image` 直接用 LR 图像监督 scale0，不需要 stage1 LR VAE checkpoint。
 
-**Q: 对齐loss权重怎么选择？**  
-A: 建议从1.0开始，根据L_align和重建loss的相对大小调整。如果L_align过大，降低权重；过小则增加。
+**Q: 对齐loss权重怎么选择？**
+A: 当前默认 0.5。它是辅助项，目标是让 scale0 有稳定 LR 结构感，不要压过 HR 全尺度重建；如果 scale0 迟迟不像 LR，可尝试 1.0 或加 warmup ablation。
 

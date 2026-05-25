@@ -32,9 +32,12 @@ DATA_PATH/
 |------|------|
 | `training_stage=1` | 只训练 LR VAE，HR VAE 冻结 |
 | `training_stage=2` | 只训练 HR VAE，LR VAE 冻结 |
-| `use_lr_hr_alignment=True` | 在阶段 2 启用 5x5 latent 对齐损失 |
+| `use_lr_hr_alignment=True` | 在阶段 2 启用 scale0 辅助对齐损失 |
 | `use_lr_hr_alignment=False` | 阶段 2 仍使用 LR-HR paired loader，但只训练 HR 重建，不加入对齐损失 |
-| `alignment_loss_weight=1.0` | 对齐损失权重 |
+| `alignment_loss_type=scale0_image` | 默认新路径：不依赖 stage1 latent，把 HR scale0 latent 解码成图像后对齐 LR 图像 |
+| `alignment_loss_type=latent` | 旧路径：对齐 HR scale0 posterior mean 与 stage1 LR VAE latent |
+| `alignment_loss_weight=0.5` | 对齐损失权重 |
+| `alignment_loss_warmup_ep=0.0` | 对齐损失线性 warmup epoch 数，0 表示不启用 |
 
 ### 2.1 Stage 1
 
@@ -48,12 +51,13 @@ L_total = L1_rec * wei_l1 + LPIPS * wei_lpips + KL * lr_vq_beta + L_adv * wei_di
 
 ### 2.2 Stage 2
 
-目标：训练 HR 多尺度 VAE，同时让 HR 最粗尺度语义与 LR `5x5` latent 对齐。
+目标：训练 HR 多尺度 VAE，同时让 HR 最粗尺度能直接重建 LR 视觉结构。默认不再依赖 stage1 LR VAE latent。
 
 损失形式：
 
 ```text
-L_total = L1_rec * wei_l1 + LPIPS * wei_lpips + KL + L_adv * wei_disc + MSE(HR_5x5, LR_5x5) * alignment_loss_weight
+L_total = L_hr_rec + KL + L_adv * wei_disc + L_scale0_img * alignment_loss_weight
+L_scale0_img = L1(DecodeStage2Scale0(HR_scale0_mean), Resize(LR_image, decoded_scale0_size))
 ```
 
 ---
@@ -62,20 +66,27 @@ L_total = L1_rec * wei_l1 + LPIPS * wei_lpips + KL + L_adv * wei_disc + MSE(HR_5
 
 文件：`trainer_two_stage.py`
 
-当前实现的关键点：
+当前默认实现（`alignment_loss_type=scale0_image`）的关键点：
 
-1. 先用冻结的 LR VAE 对 `inp_lr` 编码，得到 `lr_f_5x5`。
-2. 对 HR encoder 输出做 `area` 下采样，得到 `hr_f_5x5`。
-3. 再通过 HR 侧的 `mean_logvar_conv` 取均值分支，得到 `hr_f_5x5_mean`。
-4. 使用 MSE 做对齐：
+1. HR VAE 主 forward 仍然一次性完成全尺度重建与 KL。
+2. 同一次 forward 暴露 `scale_index=0` 的 posterior mean，记作 `hr_scale0_mean`。
+3. 调用 HR VAE 共享 decoder：先把 `hr_scale0_mean` 按正常 scale 累积路径上采样、过 `quant_resi` 和 `post_quant_conv`，再 decode 成 scale0-only 图像。
+4. 将 `inp_lr` resize 到 scale0-only 图像大小，默认是 `256x256`。
+5. 使用 L1 做图像空间对齐：
 
 ```python
-L_align = F.mse_loss(hr_f_5x5_mean, lr_f_5x5)
+L_align = F.l1_loss(scale0_img, resized_lr_img)
 ```
 
-这一约束的作用是让 HR 模型最粗粒度的 latent 语义对齐到 LR 模型已经学到的低分辨率语义底座。
+这一约束的作用是让 scale0 直接承担低频/LR 结构，而不是被强行拉到 stage1 LR VAE 的 latent 分布里。这样可以减少 stage1 decoder latent 空间与 stage2 共享 decoder latent 空间不一致带来的干扰。
 
-性能约束：stage2 训练时必须复用 HR 主 forward 已经算出的 encoder feature 来取得 `hr_f_5x5_mean`，不要在 loss 中再次调用 `img_to_scale_posterior_stats(inp_hr)` 之类会二次执行 HR encoder 的路径。当前推荐入口是 `VQVAE.forward(..., ret_scale_posterior_stats=True, scale_index=0)` 或 `forward_with_scale_posterior_stats()`。
+旧实现仍可作为 ablation 保留：
+
+```bash
+STAGE=2 ALIGNMENT_LOSS_TYPE=latent STAGE1_CKPT=/path/to/stage1/ckpt-best.pth bash train.sh
+```
+
+性能约束：stage2 训练时必须复用 HR 主 forward 已经算出的 encoder feature 来取得 scale0 posterior mean，不要在 loss 中再次调用 `img_to_scale_posterior_stats(inp_hr)` 之类会二次执行 HR encoder 的路径。当前推荐入口是 `VQVAE.forward(..., ret_scale_posterior_stats=True, scale_index=0)` 或 `forward_with_scale_posterior_stats()`。
 
 关闭 alignment 的 stage2 对照实验仍会加载 `(LR, HR)` 配对数据，但 loss 退化为 HR VAE 重建训练：
 
@@ -92,8 +103,8 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 修改两阶段训练逻辑时，必须优先检查：
 
 1. `patch_nums` 的最后一个值必须等于 encoder 输出分辨率，通常为 `img_size / 16`。
-2. 阶段 2 不是普通的 HR 重建训练，而是“HR 多尺度训练 + 5x5 latent 对齐”。
-3. `lr_f_5x5` 是阶段 2 的监督目标之一，不能在训练过程中被误更新。
+2. 阶段 2 不是普通的 HR 重建训练，而是“HR 多尺度训练 + scale0 辅助对齐”。
+3. 默认 `scale0_image` 对齐不需要 stage1 checkpoint；只有 `alignment_loss_type=latent` 才需要加载并冻结 LR VAE。
 4. `disc_opt`、`lr_vae_opt`、`vae_opt` 的职责边界明确，不应混用参数组。
 5. 判别器更新和生成器对抗损失不能共用同一份 `detached` fake logits：
    - `Ld` 可以使用 `rec.detach()`
@@ -138,6 +149,7 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 ```bash
 --training_stage=1
 --training_stage=2 --use_lr_hr_alignment=True
+--alignment_loss_type=scale0_image --alignment_loss_weight=0.5
 ```
 
 ### 5.3 关闭判别器
@@ -152,8 +164,9 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 
 当需要改动对齐机制时，优先核对：
 
-- LR 侧目标是否仍为 `5x5`
-- HR 侧取的是采样值、均值，还是其他形式的 latent
+- LR 侧目标是图像像素还是 legacy `5x5` latent
+- 当前使用的是 `scale0_image` 还是 legacy `latent`
+- HR 侧取的是采样值、均值，还是其他形式的 latent；默认取 posterior mean 来降低辅助 loss 噪声
 - 验证流程是否同步统计了 alignment loss
 - checkpoint 恢复后 `training_stage` 是否正确回填
 

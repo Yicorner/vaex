@@ -5,9 +5,11 @@ Stage 1:
 - train LR VAE only
 
 Stage 2:
-- freeze LR VAE
 - train HR multi-scale VAE
-- align the first HR scale token with LR posterior mean
+- default: decode the first HR scale through the shared decoder and align it
+  with the LR image in image space
+- optional legacy path: freeze LR VAE and align the first HR scale token with
+  LR posterior mean
 """
 import os
 import math
@@ -79,7 +81,9 @@ class TwoStageVAETrainer(object):
         disc_grad_ckpt=False,
         training_stage: int = 1,
         use_alignment_loss: bool = False,
+        alignment_loss_type: str = 'scale0_image',
         alignment_loss_weight: float = 1.0,
+        alignment_loss_warmup_ep: float = 0.0,
         alignment_scale_index: int = 0,
         dbg_unused=False,
         dbg_nan=False,
@@ -133,7 +137,9 @@ class TwoStageVAETrainer(object):
 
         self.training_stage = training_stage
         self.use_alignment_loss = use_alignment_loss
+        self.alignment_loss_type = self._normalize_alignment_loss_type(alignment_loss_type)
         self.alignment_loss_weight = alignment_loss_weight
+        self.alignment_loss_warmup_ep = max(float(alignment_loss_warmup_ep), 0.0)
         self.alignment_scale_index = alignment_scale_index
 
         self.usage_max = 0.0
@@ -306,9 +312,52 @@ class TwoStageVAETrainer(object):
         )
         self._lr_posterior_log_printed += 1
 
-    def _get_alignment_targets(self, inp_lr: torch.Tensor, hr_mean: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    @staticmethod
+    def _normalize_alignment_loss_type(loss_type: str) -> str:
+        key = str(loss_type or 'scale0_image').strip().lower().replace('-', '_')
+        aliases = {
+            'scale0_image': 'scale0_image',
+            'scale0_img': 'scale0_image',
+            'image': 'scale0_image',
+            'img': 'scale0_image',
+            'latent': 'latent',
+            'lr_latent': 'latent',
+            'stage1_latent': 'latent',
+        }
+        if key not in aliases:
+            raise ValueError(
+                f'Invalid alignment_loss_type={loss_type!r}. '
+                'Expected scale0_image or latent.'
+            )
+        return aliases[key]
+
+    @staticmethod
+    def _resize_image_like(src: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+        if src.shape[-2:] == ref.shape[-2:]:
+            return src
+        return F.interpolate(src, size=ref.shape[-2:], mode='bicubic', align_corners=False)
+
+    def _alignment_weight_multiplier(self, ep: int, it: int, args: arg_util.Args) -> float:
+        warmup_ep = self.alignment_loss_warmup_ep
+        if warmup_ep <= 0:
+            return 1.0
+
+        iters_per_ep = max(int(getattr(args, 'iters_per_ep', 0) or 0), 0)
+        if iters_per_ep > 0:
+            cur = ep * iters_per_ep + it + 1
+            total = max(warmup_ep * iters_per_ep, 1.0)
+            return min(1.0, cur / total)
+        return min(1.0, (ep + 1) / warmup_ep)
+
+    def _get_alignment_targets(
+        self,
+        inp_lr: torch.Tensor,
+        hr_mean: torch.Tensor,
+        lr_model: Optional[LR_VAE] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        lr_model = lr_model or self.lr_vae_wo_ddp
         with torch.no_grad():
-            lr_mean = self.lr_vae_wo_ddp.encode_to_posterior_mean(inp_lr)
+            lr_mean = lr_model.encode_to_posterior_mean(inp_lr)
 
         if hr_mean.shape != lr_mean.shape:
             raise ValueError(
@@ -318,6 +367,26 @@ class TwoStageVAETrainer(object):
                 f'(usually lr_img_size / 16).'
             )
         return lr_mean, hr_mean
+
+    def _compute_alignment_loss(
+        self,
+        inp_lr: torch.Tensor,
+        hr_scale_latent: torch.Tensor,
+        vae_model: Optional[VQVAE] = None,
+        lr_model: Optional[LR_VAE] = None,
+    ) -> torch.Tensor:
+        if self.alignment_loss_type == 'latent':
+            lr_mean, hr_mean = self._get_alignment_targets(inp_lr, hr_scale_latent, lr_model=lr_model)
+            return F.mse_loss(hr_mean, lr_mean)
+
+        vae_model = vae_model or self.vae_wo_ddp
+        scale0_img = vae_model.scale_latent_to_img(
+            hr_scale_latent,
+            scale_index=self.alignment_scale_index,
+            clamp=False,
+        )
+        lr_img_target = self._resize_image_like(inp_lr, scale0_img).detach()
+        return F.l1_loss(scale0_img, lr_img_target)
 
     def train_step_stage1(
         self,
@@ -470,7 +539,7 @@ class TwoStageVAETrainer(object):
         with maybe_record_function('HR_VAE_rec'):
             with self.vae_opt.amp_ctx:
                 if self.use_alignment_loss:
-                    rec_B3HW, usage, Lkl, hr_mean, _ = self.vae(
+                    rec_B3HW, usage, Lkl, hr_scale_latent, _ = self.vae(
                         inp_hr,
                         ret_usages=loggable,
                         ret_scale_posterior_stats=True,
@@ -478,7 +547,7 @@ class TwoStageVAETrainer(object):
                     )
                 else:
                     rec_B3HW, usage, Lkl = self.vae(inp_hr, ret_usages=loggable)
-                    hr_mean = None
+                    hr_scale_latent = None
                 self._assert_finite('rec_B3HW', rec_B3HW, ep, it, 'stage2')
                 self._assert_finite('Lkl', Lkl, ep, it, 'stage2')
                 if loggable and usage is not None:
@@ -501,12 +570,14 @@ class TwoStageVAETrainer(object):
                     Lnll = Lrec
 
                 if self.use_alignment_loss:
-                    lr_mean, hr_mean = self._get_alignment_targets(inp_lr, hr_mean)
-                    L_align = F.mse_loss(hr_mean, lr_mean)
+                    L_align = self._compute_alignment_loss(inp_lr, hr_scale_latent)
+                    align_weight_mult = self._alignment_weight_multiplier(ep, it, args)
                 else:
                     L_align = inp_hr.new_zeros(())
+                    align_weight_mult = 0.0
 
-                Lg = Lnll + Lkl + self.alignment_loss_weight * L_align
+                effective_align_weight = self.alignment_loss_weight * align_weight_mult
+                Lg = Lnll + Lkl + effective_align_weight * L_align
                 self._assert_finite('Lnll', Lnll, ep, it, 'stage2')
                 self._assert_finite('L_align', L_align, ep, it, 'stage2')
                 self._assert_finite('Lg_pre_adv', Lg, ep, it, 'stage2')
@@ -554,7 +625,8 @@ class TwoStageVAETrainer(object):
                 f'[Stage2 Debug] [Ep {ep}] [It {it}] '
                 f'Lrec={Lrec_for_log.item():.4f}, '
                 f'Lkl={(Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl):.6f}, '
-                f'L_align={L_align.item():.6f}',
+                f'L_align={L_align.item():.6f}, '
+                f'align_type={self.alignment_loss_type}, align_w={effective_align_weight:.4f}',
                 flush=True,
             )
             self._debug_loss_printed += 1
@@ -572,6 +644,7 @@ class TwoStageVAETrainer(object):
                 dnm=grad_norm_d,
                 usage=self.usage_max,
                 L_align=L_align.item(),
+                W_align=effective_align_weight,
             )
             if args.save_reconstruction_images and dist.is_master() and self._should_save_reconstruction(it, metric_lg, args):
                 try:
@@ -679,12 +752,17 @@ class TwoStageVAETrainer(object):
                 inp = inp_hr
 
                 if self.use_alignment_loss:
-                    rec, _, _, hr_mean, _ = eval_model.forward_with_scale_posterior_stats(
+                    rec, _, _, hr_scale_latent, _ = eval_model.forward_with_scale_posterior_stats(
                         inp_hr,
                         scale_index=self.alignment_scale_index,
                     )
-                    lr_mean = lr_eval_model.encode_to_posterior_mean(inp_lr)
-                    align_loss_sum += F.mse_loss(hr_mean, lr_mean).item() * inp.shape[0]
+                    L_align_eval = self._compute_alignment_loss(
+                        inp_lr,
+                        hr_scale_latent,
+                        vae_model=eval_model,
+                        lr_model=lr_eval_model,
+                    )
+                    align_loss_sum += L_align_eval.item() * inp.shape[0]
                 else:
                     rec, _, _ = eval_model(inp_hr)
 
@@ -717,7 +795,9 @@ class TwoStageVAETrainer(object):
             'disc_opt': self.disc_opt.state_dict(),
             'training_stage': self.training_stage,
             'use_alignment_loss': self.use_alignment_loss,
+            'alignment_loss_type': self.alignment_loss_type,
             'alignment_loss_weight': self.alignment_loss_weight,
+            'alignment_loss_warmup_ep': self.alignment_loss_warmup_ep,
             'alignment_scale_index': self.alignment_scale_index,
         }
         if self.using_ema:
@@ -736,7 +816,9 @@ class TwoStageVAETrainer(object):
         self.disc_opt.load_state_dict(state['disc_opt'])
         self.training_stage = state.get('training_stage', self.training_stage)
         self.use_alignment_loss = state.get('use_alignment_loss', self.use_alignment_loss)
+        self.alignment_loss_type = self._normalize_alignment_loss_type(state.get('alignment_loss_type', self.alignment_loss_type))
         self.alignment_loss_weight = state.get('alignment_loss_weight', self.alignment_loss_weight)
+        self.alignment_loss_warmup_ep = max(float(state.get('alignment_loss_warmup_ep', self.alignment_loss_warmup_ep)), 0.0)
         self.alignment_scale_index = state.get('alignment_scale_index', self.alignment_scale_index)
         if self.using_ema:
             if 'vae_ema' in state:
@@ -758,5 +840,11 @@ class TwoStageVAETrainer(object):
         else:
             freeze_model(self.lr_vae_wo_ddp)
             unfreeze_model(self.vae_wo_ddp)
-            print('[Stage 2] Training HR VAE with alignment, LR VAE frozen')
+            if self.use_alignment_loss:
+                print(
+                    f'[Stage 2] Training HR VAE with {self.alignment_loss_type} alignment '
+                    f'(weight={self.alignment_loss_weight}, warmup_ep={self.alignment_loss_warmup_ep})'
+                )
+            else:
+                print('[Stage 2] Training HR VAE without auxiliary alignment')
 

@@ -140,6 +140,25 @@ bash train.sh
 
 
 
+# 当前推荐：stage2 scale0 图像空间对齐（不依赖 stage1 LR latent）
+# scale0 latent 会走 stage2 共享 decoder 解码成 256x256 图像，再和 LR 图像 resize 后做 L1。
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64 \
+STAGE=2 \
+EXP_NAME=stage2_scale0_img_align_lr64_patch4to16 \
+EXP_NOTE="stage2 scale0 decoded image aligned to resized LR pixels; no stage1 latent dependency" \
+RECONSTRUCTION_DIR_NAME=stage2_scale0_img_align_lr64_patch4to16 \
+LR_FOLDER=LR_64x64 \
+HR_FOLDER=HR \
+LR_IMG_SIZE=64 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.5 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=200 \
+bash train.sh
+
 # 如何查看torch run 命令是否被kill
 ps -ef | grep torchrun
 
@@ -170,6 +189,12 @@ ps -ef | grep torchrun
 # 可用 LR_FOLDER（或小写 lr_folder）指定数据集中 LR 子目录名（默认 LR）。
 # 可用 HR_FOLDER（或小写 hr_folder）指定数据集中 HR 子目录名（默认 HR）。
 # 示例：LR_FOLDER=LR_64x64 bash train.sh
+
+# stage2 alignment
+# 默认 ALIGNMENT_LOSS_TYPE=scale0_image，不需要 STAGE1_CKPT。
+# 可用 ALIGNMENT_LOSS_WEIGHT 调整 scale0 图像 loss 权重，默认 0.5。
+# 可用 ALIGNMENT_LOSS_WARMUP_EP 给 scale0 loss 做线性 warmup，默认 0。
+# 如果要复现实验旧版本 latent 对齐，设置 ALIGNMENT_LOSS_TYPE=latent 并提供 STAGE1_CKPT。
 
 # test
 python eval_stage1_ckpt.py \

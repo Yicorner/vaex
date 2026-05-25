@@ -73,9 +73,11 @@ class Args(Tap):
     
     # Two-stage training control
     training_stage: int = 1         # 1: train LR VAE only; 2: train HR VAE with alignment
-    use_lr_hr_alignment: bool = False  # whether to use LR-HR alignment loss in stage 2
-    alignment_loss_weight: float = 1.0  # weight for LR-HR 5x5 alignment loss
-    lr_vae_resume: str = ''         # stage-2 warm start: load only LR VAE weights from a stage-1 checkpoint
+    use_lr_hr_alignment: bool = False  # whether to use an auxiliary LR-HR alignment loss in stage 2
+    alignment_loss_type: str = 'scale0_image'  # 'scale0_image' (default, no stage1 latent) or legacy 'latent'
+    alignment_loss_weight: float = 0.5  # stage-2 auxiliary alignment weight
+    alignment_loss_warmup_ep: float = 0.0  # linearly ramp alignment weight over N epochs; 0 disables warmup
+    lr_vae_resume: str = ''         # optional stage-2 warm start for legacy latent alignment
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
     
     # DINO discriminator

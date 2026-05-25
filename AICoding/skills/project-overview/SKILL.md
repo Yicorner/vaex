@@ -99,7 +99,7 @@ myvaex/
 
 文件：`models/lr_vae.py`
 
-职责：将 LR 图像编码为稳定的 `5x5` latent，作为阶段 2 的对齐目标。
+职责：将 LR 图像编码为稳定的 latent。当前 stage2 默认不再依赖它做对齐；只有 legacy `alignment_loss_type=latent` 实验会把它作为对齐目标。
 
 结构要点：
 

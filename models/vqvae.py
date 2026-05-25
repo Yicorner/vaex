@@ -115,7 +115,13 @@ class VQVAE(nn.Module):
     
     def fhat_to_img(self, f_hat: torch.Tensor):
         return self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1)
-    
+
+    def scale_latent_to_img(self, h_BChw: torch.Tensor, scale_index: int = 0, clamp: bool = False):
+        """Decode one scale's latent through the shared HR decoder."""
+        f_hat = self.quantize.scale_latent_to_fhat(h_BChw, scale_index=scale_index)
+        img = self.decoder(self.post_quant_conv(f_hat))
+        return img.clamp(-1, 1) if clamp else img
+
     def img_to_fhat_multiscale(self, inp_img_no_grad: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.Tensor]:
         """Convert image to multi-scale latent representations (continuous VAE)."""
         f = self.quant_conv(self.encoder(inp_img_no_grad))

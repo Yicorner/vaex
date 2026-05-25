@@ -37,8 +37,10 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `training_stage` | `1` | `1` 表示 LR 阶段，`2` 表示 HR 阶段 |
-| `use_lr_hr_alignment` | `False` | 是否启用 LR-HR 对齐损失 |
-| `alignment_loss_weight` | `1.0` | 对齐损失权重 |
+| `use_lr_hr_alignment` | `False` | 是否启用 stage2 scale0 辅助对齐损失 |
+| `alignment_loss_type` | `scale0_image` | 默认把 stage2 scale0 latent 解码成图像，与 resized LR 图像做 L1；`latent` 为旧的 stage1 LR latent 对齐 |
+| `alignment_loss_weight` | `0.5` | 对齐损失权重 |
+| `alignment_loss_warmup_ep` | `0.0` | 对齐损失线性 warmup epoch 数；0 表示不启用 |
 
 ### 1.3.5 数据子目录
 
@@ -57,10 +59,12 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 |------|--------|------|
 | `PATCH_NUMS` | `"5 6 8 10 13 16"` | 多尺度配置字符串，脚本内会拆成数组传给 `--patch_nums` |
 | `LR_IMG_SIZE` | `80` | 传给 `--lr_img_size`，需与 `patch_nums[0]` 对齐（`lr_img_size/16`） |
-| `STAGE1_CKPT` | `${STAGE1_BED}/ckpt-best.pth` | stage2 的 `--lr_vae_resume` 路径，可直接指向指定 stage1 checkpoint |
+| `STAGE1_CKPT` | 空 | 仅 legacy `ALIGNMENT_LOSS_TYPE=latent` 需要；stage2 默认图像空间对齐不依赖 stage1 checkpoint |
 | `TRAIN_LOG_POINTS_PER_EPOCH` | `40` | 控制每个 epoch 内 `[Ep]: [...]` 进度日志打印点数量；值越大打印越频繁 |
-| `USE_LR_HR_ALIGNMENT` | `True` | stage2 是否启用 LR-HR latent 对齐；设为 `False` 可做“paired loader + HR 重建”对照实验 |
-| `ALIGNMENT_LOSS_WEIGHT` | `1.0` | stage2 对齐损失权重，仅在 `USE_LR_HR_ALIGNMENT=True` 时影响训练 loss |
+| `USE_LR_HR_ALIGNMENT` | `True` | stage2 是否启用 scale0 辅助对齐；设为 `False` 可做“paired loader + HR 重建”对照实验 |
+| `ALIGNMENT_LOSS_TYPE` | `scale0_image` | stage2 默认新对齐方式；`latent` 才走旧的 LR VAE latent MSE |
+| `ALIGNMENT_LOSS_WEIGHT` | `0.5` | stage2 对齐损失权重，仅在 `USE_LR_HR_ALIGNMENT=True` 时影响训练 loss |
+| `ALIGNMENT_LOSS_WARMUP_EP` | `0.0` | stage2 对齐损失 warmup epoch 数 |
 
 stage2 关闭 alignment 的对照入口：
 
@@ -69,6 +73,17 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 ```
 
 该对照仍使用 paired loader，即每个 batch 返回 `(inp_lr, inp_hr)`，但 `trainer_two_stage.py` 不计算或加入 `L_align`，可用于隔离“LR-HR 数据加载/训练入口变化”和“alignment loss 本身”的影响。
+
+当前推荐 stage2 入口是不依赖 stage1 latent 的图像空间 scale0 对齐：
+
+```bash
+STAGE=2 \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.5 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+bash train.sh
+```
 
 ### 1.4 实验与训练
 

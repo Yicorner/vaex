@@ -3,7 +3,7 @@ set -e
 
 # 用法:
 #   bash train.sh                      # 默认 FEATURIZE，跑 stage 1
-#   STAGE=2 bash train.sh              # FEATURIZE，跑 stage 2
+#   STAGE=2 bash train.sh              # FEATURIZE，跑 stage 2（默认 scale0 图像空间对齐，不依赖 stage1 latent）
 #   TRAIN_ENV=HOME bash train.sh       # HOME，跑 stage 1
 #   TRAIN_ENV=HOME STAGE=2 bash train.sh
 #   VAL_AND_SAVING_PER_EP=5 bash train.sh   # 每 N epoch 验证与存 ckpt，默认 2（也可用 val_and_saving_per_ep）
@@ -76,20 +76,29 @@ RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
 USE_LR_HR_ALIGNMENT=${USE_LR_HR_ALIGNMENT:-${use_lr_hr_alignment:-True}}
-ALIGNMENT_LOSS_WEIGHT=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-1.0}}
+ALIGNMENT_LOSS_TYPE=${ALIGNMENT_LOSS_TYPE:-${alignment_loss_type:-scale0_image}}
+ALIGNMENT_LOSS_TYPE_KEY=$(printf '%s' "$ALIGNMENT_LOSS_TYPE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+ALIGNMENT_LOSS_WEIGHT=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-0.5}}
+ALIGNMENT_LOSS_WARMUP_EP=${ALIGNMENT_LOSS_WARMUP_EP:-${alignment_loss_warmup_ep:-0.0}}
 
 # 输出目录
 STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
-STAGE2_BED=${STAGE2_BED:-myvaex_stage2_hr_aligned}
-STAGE1_CKPT=${STAGE1_CKPT:-${stage1_ckpt:-"${STAGE1_BED}/ckpt-best.pth"}}
+STAGE2_BED=${STAGE2_BED:-myvaex_stage2_hr_scale0_img_aligned}
+STAGE1_CKPT=${STAGE1_CKPT:-${stage1_ckpt:-}}
+if [ "$ALIGNMENT_LOSS_TYPE_KEY" = "latent" ] && [ -z "$STAGE1_CKPT" ]; then
+  STAGE1_CKPT="${STAGE1_BED}/ckpt-best.pth"
+fi
 STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
 STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
 if [ "$USE_LR_HR_ALIGNMENT" = "False" ] || [ "$USE_LR_HR_ALIGNMENT" = "false" ] || [ "$USE_LR_HR_ALIGNMENT" = "0" ]; then
   STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_no_alignment"
   STAGE2_DEFAULT_EXP_NOTE="Stage 2 control: train HR multi-scale VAE on paired LR-HR loader without alignment loss"
+elif [ "$ALIGNMENT_LOSS_TYPE_KEY" = "latent" ]; then
+  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_latent_aligned"
+  STAGE2_DEFAULT_EXP_NOTE="Stage 2 legacy: train HR multi-scale VAE with first-scale posterior mean aligned to stage1 LR latent"
 else
-  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_aligned"
-  STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with first-scale posterior mean alignment"
+  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_scale0_img_aligned"
+  STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with decoded scale0 image aligned to resized LR pixels"
 fi
 
 if [ "$STAGE" = "1" ]; then
@@ -125,6 +134,10 @@ if [ "$STAGE" = "1" ]; then
 elif [ "$STAGE" = "2" ]; then
   EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE2_DEFAULT_EXP_NAME}}
   EXP_NOTE=${EXP_NOTE:-${exp_note:-$STAGE2_DEFAULT_EXP_NOTE}}
+  LR_VAE_RESUME_ARGS=()
+  if [ -n "$STAGE1_CKPT" ]; then
+    LR_VAE_RESUME_ARGS+=(--lr_vae_resume="$STAGE1_CKPT")
+  fi
   torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_two_stage.py \
   --exp_name="$EXP_NAME" --bed="$STAGE2_BED" \
   --exp_note="$EXP_NOTE" \
@@ -133,8 +146,10 @@ elif [ "$STAGE" = "2" ]; then
   --hr_folder="$HR_FOLDER" \
   --training_stage=2 \
   --use_lr_hr_alignment="$USE_LR_HR_ALIGNMENT" \
+  --alignment_loss_type="$ALIGNMENT_LOSS_TYPE" \
   --alignment_loss_weight="$ALIGNMENT_LOSS_WEIGHT" \
-  --lr_vae_resume="$STAGE1_CKPT" \
+  --alignment_loss_warmup_ep="$ALIGNMENT_LOSS_WARMUP_EP" \
+  "${LR_VAE_RESUME_ARGS[@]}" \
   --lbs=4 \
   --ep="${STAGE2_EP:-${EP_COMMON:-150}}" \
   --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \

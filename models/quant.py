@@ -272,6 +272,26 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 else: ls_f_hat_BChw.append(f_hat)
         
         return ls_f_hat_BChw
+
+    def scale_latent_to_fhat(self, h_BChw: torch.Tensor, scale_index: int = 0) -> torch.Tensor:
+        """
+        Convert one scale's latent into a decoder-ready full-resolution feature map.
+
+        This is used by stage-2 image-space scale0 alignment: decode only the
+        coarse latent while keeping the same upsample + quant_resi path used by
+        the normal multi-scale accumulation.
+        """
+        if not (0 <= scale_index < len(self.v_patch_nums)):
+            raise IndexError(f'{scale_index=} out of range for {self.v_patch_nums=}')
+
+        SN = len(self.v_patch_nums)
+        HW = self.v_patch_nums[-1]
+        if scale_index != SN - 1:
+            h_BChw = F.interpolate(h_BChw, size=(HW, HW), mode='bicubic').contiguous()
+        else:
+            h_BChw = h_BChw.contiguous()
+
+        return self.quant_resi[scale_index / max(SN - 1, 1)](h_BChw)
     
     def f_to_fhat_multiscale(self, f_BChw: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.Tensor]:
         """
