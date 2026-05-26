@@ -187,6 +187,35 @@ TRAIN_LOG_POINTS_PER_EPOCH=100 \
 STAGE2_EP=3 \
 bash train.sh
 
+
+# 
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
+STAGE=2 \
+EXP_NAME=stage2_scale0_img_align_lr256_patch4to16_no_kl_disc_debug \
+EXP_NOTE="stage2 deterministic AE; scale0 decoded image aligned to LR pixels; no KL or sampling; disc debug" \
+RECONSTRUCTION_DIR_NAME=stage2_scale0_img_align_lr256_patch4to16_no_kl_disc_debug \
+LR_FOLDER=LR \
+HR_FOLDER=HR \
+LR_IMG_SIZE=256 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=100 \
+STAGE2_EP=3 \
+DBG_NAN=True \
+STAGE2_DISC_WEIGHT=-0.05 \
+STAGE2_DISC_START_EP=1.0 \
+STAGE2_DISC_WARMUP_EP=1.0 \
+DISC_AUG_PROB=0.5 \
+bash train.sh
+
 # 如何查看torch run 命令是否被kill
 ps -ef | grep torchrun
 
