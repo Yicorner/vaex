@@ -142,14 +142,14 @@ bash train.sh
 
 # 当前推荐：stage2 scale0 图像空间对齐（不依赖 stage1 LR latent）
 # scale0 latent 会走 stage2 共享 decoder 解码成 256x256 图像，再和 LR 图像 resize 后做 L1。
-DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref_and_LR64 \
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
 STAGE=2 \
-EXP_NAME=stage2_scale0_img_align_lr64_patch4to16 \
+EXP_NAME=stage2_scale0_img_align_lr256_patch4to16 \
 EXP_NOTE="stage2 scale0 decoded image aligned to resized LR pixels; no stage1 latent dependency" \
-RECONSTRUCTION_DIR_NAME=stage2_scale0_img_align_lr64_patch4to16 \
-LR_FOLDER=LR_64x64 \
+RECONSTRUCTION_DIR_NAME=stage2_scale0_img_align_lr256_patch4to16 \
+LR_FOLDER=LR \
 HR_FOLDER=HR \
-LR_IMG_SIZE=64 \
+LR_IMG_SIZE=256 \
 PATCH_NUMS="4 5 6 8 10 13 16" \
 USE_LR_HR_ALIGNMENT=True \
 ALIGNMENT_LOSS_TYPE=scale0_image \
@@ -157,6 +157,7 @@ ALIGNMENT_LOSS_WEIGHT=0.5 \
 ALIGNMENT_LOSS_WARMUP_EP=0 \
 VAL_AND_SAVING_PER_EP=1 \
 TRAIN_LOG_POINTS_PER_EPOCH=200 \
+STAGE2_EP=3 \
 bash train.sh
 
 # 如何查看torch run 命令是否被kill
