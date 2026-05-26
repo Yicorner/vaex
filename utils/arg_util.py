@@ -77,6 +77,7 @@ class Args(Tap):
     alignment_loss_type: str = 'scale0_image'  # 'scale0_image' (default, no stage1 latent) or legacy 'latent'
     alignment_loss_weight: float = 0.5  # stage-2 auxiliary alignment weight
     alignment_loss_warmup_ep: float = 0.0  # linearly ramp alignment weight over N epochs; 0 disables warmup
+    stage2_use_kl: bool = True       # stage-2 VAE mode; False uses posterior mean and zero KL loss (deterministic AE)
     lr_vae_resume: str = ''         # optional stage-2 warm start for legacy latent alignment
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
     

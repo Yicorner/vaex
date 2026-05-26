@@ -6,6 +6,7 @@ Stage 1:
 
 Stage 2:
 - train HR multi-scale VAE
+- optional: set stage2_use_kl=False to train deterministic AE (posterior mean, KL=0)
 - default: decode the first HR scale through the shared decoder and align it
   with the LR image in image space
 - optional legacy path: freeze LR VAE and align the first HR scale token with
@@ -85,6 +86,7 @@ class TwoStageVAETrainer(object):
         alignment_loss_weight: float = 1.0,
         alignment_loss_warmup_ep: float = 0.0,
         alignment_scale_index: int = 0,
+        stage2_use_kl: bool = True,
         dbg_unused=False,
         dbg_nan=False,
     ):
@@ -141,6 +143,7 @@ class TwoStageVAETrainer(object):
         self.alignment_loss_weight = alignment_loss_weight
         self.alignment_loss_warmup_ep = max(float(alignment_loss_warmup_ep), 0.0)
         self.alignment_scale_index = alignment_scale_index
+        self.stage2_use_kl = self._normalize_bool(stage2_use_kl)
 
         self.usage_max = 0.0
         self._debug_loss_printed = 0
@@ -274,7 +277,12 @@ class TwoStageVAETrainer(object):
         return self.d_criterion(is_real_pred=True, logits=fake_logits, for_g=True)
 
     @torch.no_grad()
-    def _deterministic_reconstruction(self, model: nn.Module, inp: torch.Tensor) -> torch.Tensor:
+    def _deterministic_reconstruction(
+        self,
+        model: nn.Module,
+        inp: torch.Tensor,
+        use_kl: Optional[bool] = None,
+    ) -> torch.Tensor:
         """Run a forward pass in eval mode so posterior uses its mean (no sampling noise).
 
         This is what `eval_ep` uses, and it's what the saved comparison images should show —
@@ -283,7 +291,10 @@ class TwoStageVAETrainer(object):
         was_training = model.training
         model.eval()
         try:
-            rec, _, _ = model(inp)
+            if use_kl is None:
+                rec, _, _ = model(inp)
+            else:
+                rec, _, _ = model(inp, use_kl=use_kl)
         finally:
             model.train(was_training)
         return rec.detach()
@@ -311,6 +322,12 @@ class TwoStageVAETrainer(object):
             flush=True,
         )
         self._lr_posterior_log_printed += 1
+
+    @staticmethod
+    def _normalize_bool(value) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() not in {'0', 'false', 'no', 'off'}
+        return bool(value)
 
     @staticmethod
     def _normalize_alignment_loss_type(loss_type: str) -> str:
@@ -544,9 +561,14 @@ class TwoStageVAETrainer(object):
                         ret_usages=loggable,
                         ret_scale_posterior_stats=True,
                         scale_index=self.alignment_scale_index,
+                        use_kl=self.stage2_use_kl,
                     )
                 else:
-                    rec_B3HW, usage, Lkl = self.vae(inp_hr, ret_usages=loggable)
+                    rec_B3HW, usage, Lkl = self.vae(
+                        inp_hr,
+                        ret_usages=loggable,
+                        use_kl=self.stage2_use_kl,
+                    )
                     hr_scale_latent = None
                 self._assert_finite('rec_B3HW', rec_B3HW, ep, it, 'stage2')
                 self._assert_finite('Lkl', Lkl, ep, it, 'stage2')
@@ -626,7 +648,8 @@ class TwoStageVAETrainer(object):
                 f'Lrec={Lrec_for_log.item():.4f}, '
                 f'Lkl={(Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl):.6f}, '
                 f'L_align={L_align.item():.6f}, '
-                f'align_type={self.alignment_loss_type}, align_w={effective_align_weight:.4f}',
+                f'align_type={self.alignment_loss_type}, align_w={effective_align_weight:.4f}, '
+                f'stage2_use_kl={self.stage2_use_kl}',
                 flush=True,
             )
             self._debug_loss_printed += 1
@@ -650,7 +673,11 @@ class TwoStageVAETrainer(object):
                 try:
                     save_dir = self._get_reconstruction_save_dir(args)
                     self._record_reconstruction_metadata(save_dir, args)
-                    rec_for_vis = self._deterministic_reconstruction(self.vae_wo_ddp, inp_hr)
+                    rec_for_vis = self._deterministic_reconstruction(
+                        self.vae_wo_ddp,
+                        inp_hr,
+                        use_kl=self.stage2_use_kl,
+                    )
                     save_reconstruction_comparison(
                         original=inp_hr,
                         reconstructed=rec_for_vis,
@@ -755,6 +782,7 @@ class TwoStageVAETrainer(object):
                     rec, _, _, hr_scale_latent, _ = eval_model.forward_with_scale_posterior_stats(
                         inp_hr,
                         scale_index=self.alignment_scale_index,
+                        use_kl=self.stage2_use_kl,
                     )
                     L_align_eval = self._compute_alignment_loss(
                         inp_lr,
@@ -764,7 +792,7 @@ class TwoStageVAETrainer(object):
                     )
                     align_loss_sum += L_align_eval.item() * inp.shape[0]
                 else:
-                    rec, _, _ = eval_model(inp_hr)
+                    rec, _, _ = eval_model(inp_hr, use_kl=self.stage2_use_kl)
 
             rec_loss += F.l1_loss(rec, inp, reduction='sum').item()
             inp_np = inp.cpu().numpy()
@@ -799,6 +827,7 @@ class TwoStageVAETrainer(object):
             'alignment_loss_weight': self.alignment_loss_weight,
             'alignment_loss_warmup_ep': self.alignment_loss_warmup_ep,
             'alignment_scale_index': self.alignment_scale_index,
+            'stage2_use_kl': self.stage2_use_kl,
         }
         if self.using_ema:
             state['vae_ema'] = self.vae_ema.state_dict()
@@ -820,6 +849,7 @@ class TwoStageVAETrainer(object):
         self.alignment_loss_weight = state.get('alignment_loss_weight', self.alignment_loss_weight)
         self.alignment_loss_warmup_ep = max(float(state.get('alignment_loss_warmup_ep', self.alignment_loss_warmup_ep)), 0.0)
         self.alignment_scale_index = state.get('alignment_scale_index', self.alignment_scale_index)
+        self.stage2_use_kl = self._normalize_bool(state.get('stage2_use_kl', self.stage2_use_kl))
         if self.using_ema:
             if 'vae_ema' in state:
                 self.vae_ema.load_state_dict(state['vae_ema'], strict=strict)
@@ -843,8 +873,9 @@ class TwoStageVAETrainer(object):
             if self.use_alignment_loss:
                 print(
                     f'[Stage 2] Training HR VAE with {self.alignment_loss_type} alignment '
-                    f'(weight={self.alignment_loss_weight}, warmup_ep={self.alignment_loss_warmup_ep})'
+                    f'(weight={self.alignment_loss_weight}, warmup_ep={self.alignment_loss_warmup_ep}, '
+                    f'stage2_use_kl={self.stage2_use_kl})'
                 )
             else:
-                print('[Stage 2] Training HR VAE without auxiliary alignment')
+                print(f'[Stage 2] Training HR VAE without auxiliary alignment (stage2_use_kl={self.stage2_use_kl})')
 

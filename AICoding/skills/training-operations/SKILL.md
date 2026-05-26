@@ -21,7 +21,7 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `vocab_width` | `32` | HR latent 通道数 |
 | `ch` | `160` | HR 主干基础通道数 |
 | `share_quant_resi` | `4` | `quant_resi` 共享策略 |
-| `vq_beta` | `0.25` | HR KL loss 权重 |
+| `vq_beta` | `0.25` | HR KL loss 权重；当 stage2 `stage2_use_kl=False` 时不会进入 stage2 loss；`train.sh` 用 `HR_VQ_BETA` 覆盖 |
 
 ### 1.2 LR VAE
 
@@ -41,6 +41,7 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `alignment_loss_type` | `scale0_image` | 默认把 stage2 scale0 latent 解码成图像，与 resized LR 图像做 L1；`latent` 为旧的 stage1 LR latent 对齐 |
 | `alignment_loss_weight` | `0.5` | 对齐损失权重 |
 | `alignment_loss_warmup_ep` | `0.0` | 对齐损失线性 warmup epoch 数；0 表示不启用 |
+| `stage2_use_kl` | `True` | stage2 是否保留 VAE KL/采样；设为 `False` 时 stage2 变成 deterministic AE，训练也使用 posterior mean，`Lkl=0` |
 
 ### 1.3.5 数据子目录
 
@@ -63,8 +64,15 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `TRAIN_LOG_POINTS_PER_EPOCH` | `40` | 控制每个 epoch 内 `[Ep]: [...]` 进度日志打印点数量；值越大打印越频繁 |
 | `USE_LR_HR_ALIGNMENT` | `True` | stage2 是否启用 scale0 辅助对齐；设为 `False` 可做“paired loader + HR 重建”对照实验 |
 | `ALIGNMENT_LOSS_TYPE` | `scale0_image` | stage2 默认新对齐方式；`latent` 才走旧的 LR VAE latent MSE |
-| `ALIGNMENT_LOSS_WEIGHT` | `0.5` | stage2 对齐损失权重，仅在 `USE_LR_HR_ALIGNMENT=True` 时影响训练 loss |
+| `ALIGNMENT_LOSS_WEIGHT` | VAE `0.5` / no-KL `0.25` | stage2 对齐损失权重，仅在 `USE_LR_HR_ALIGNMENT=True` 时影响训练 loss |
 | `ALIGNMENT_LOSS_WARMUP_EP` | `0.0` | stage2 对齐损失 warmup epoch 数 |
+| `STAGE2_USE_KL` | `True` | stage2 是否保留 KL/采样；`False` 表示 deterministic AE 模式 |
+| `STAGE2_L1_WEIGHT` | no-KL 时 `1.0` | stage2 `--l1`，也可用通用 `L1` / `L1_WEIGHT` 覆盖 |
+| `STAGE2_L2_WEIGHT` | no-KL 时 `0.25` | stage2 `--l2`；降低它通常能减少 MSE 带来的平滑 |
+| `STAGE2_LPIPS_WEIGHT` | no-KL 时 `0.25` | stage2 `--lp`；trainer 内实际 LPIPS 权重为 `2 * lp` |
+| `STAGE2_DISC_WEIGHT` | no-KL 时 `0.2` | stage2 `--ld`；过大可能产生伪细节 |
+| `STAGE2_DISC_START_EP` | no-KL 时 `0.5` | stage2 判别器启动 epoch；短跑不能继续用 30 |
+| `STAGE2_DISC_WARMUP_EP` | no-KL 时 `0.5` | stage2 判别器 warmup epoch |
 
 stage2 关闭 alignment 的对照入口：
 
@@ -80,10 +88,21 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 STAGE=2 \
 USE_LR_HR_ALIGNMENT=True \
 ALIGNMENT_LOSS_TYPE=scale0_image \
-ALIGNMENT_LOSS_WEIGHT=0.5 \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
 ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
+STAGE2_DISC_WEIGHT=0.2 \
+STAGE2_DISC_START_EP=0.5 \
+STAGE2_DISC_WARMUP_EP=0.5 \
 bash train.sh
 ```
+
+`STAGE2_USE_KL=False` 的日志预期：`[stage2 mode] deterministic AE...`，Stage2 Debug 里的 `Lkl=0.000000`，进度条 `Lkl` 约为 `0.00e+00`。这是正常信号，不是 KL 统计坏掉。
+
+如果重建仍偏糊，优先检查 `STAGE2_DISC_START_EP` 是否小于总 epoch；例如 `STAGE2_EP=3` 且 `STAGE2_DISC_START_EP=30` 时，GAN 分支永远不会启动。
 
 ### 1.4 实验与训练
 
@@ -97,6 +116,7 @@ bash train.sh
 | `vae_lr` / `disc_lr` | `3e-4` | 学习率 |
 | `ld` | `0.4` | 判别器损失权重；`0` 表示关闭判别器 |
 | `disc_start_ep` | `0` | 判别器启动 epoch；`0` 表示自动设为 `0.2 * ep` |
+| `disc_warmup_ep` | `0` | 判别器 warmup epoch；`0` 表示自动设为 `0.02 * ep` |
 | `img_size` | `256` | HR 输入图像大小 |
 | `val_and_saving_per_ep` | `5` | 每隔多少个 epoch 验证并保存 |
 

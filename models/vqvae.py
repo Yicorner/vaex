@@ -65,27 +65,29 @@ class VQVAE(nn.Module):
         ret_usages=False,
         ret_scale_posterior_stats: bool = False,
         scale_index: int = 0,
+        use_kl: bool = True,
     ):   # -> rec_B3HW, usages, kl_loss
         """
          for continuous multi-scale VAE training.
-        
+
         Args:
             inp: input images [B, 3, H, W]
             ret_usages: whether to return usage statistics (kept for compatibility)
             ret_scale_posterior_stats: whether to also return one scale's posterior mean/logvar
             scale_index: index into `v_patch_nums` when returning posterior stats
-        
+            use_kl: if False, train as deterministic autoencoder with zero KL loss
+
         Returns:
             rec_B3HW: reconstructed images [B, 3, H, W]
             usages: usage statistics (None for continuous VAE)
             kl_loss: KL divergence loss
             optional scale_mean, scale_logvar: posterior stats for alignment
         """
-        # Encode, quantize (sample from Gaussian), and decode
+        # Encode, quantize, and decode. In AE mode, quantize uses posterior means.
         f = self.quant_conv(self.encoder(inp))
         if ret_scale_posterior_stats:
             scale_mean, scale_logvar = self.quantize.get_scale_posterior_stats(f, scale_index=scale_index)
-        f_hat, usages, kl_loss = self.quantize(f, ret_usages=ret_usages)
+        f_hat, usages, kl_loss = self.quantize(f, ret_usages=ret_usages, use_kl=use_kl)
         rec_B3HW = self.decoder(self.post_quant_conv(f_hat))
 
         if ret_scale_posterior_stats:
@@ -99,6 +101,7 @@ class VQVAE(nn.Module):
         inp: torch.Tensor,
         scale_index: int = 0,
         ret_usages: bool = False,
+        use_kl: bool = True,
     ) -> Tuple[torch.Tensor, Optional[List[float]], torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward once and expose one scale's posterior stats for alignment.
@@ -111,6 +114,7 @@ class VQVAE(nn.Module):
             ret_usages=ret_usages,
             ret_scale_posterior_stats=True,
             scale_index=scale_index,
+            use_kl=use_kl,
         )
     
     def fhat_to_img(self, f_hat: torch.Tensor):

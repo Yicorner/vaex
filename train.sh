@@ -9,6 +9,7 @@ set -e
 #   VAL_AND_SAVING_PER_EP=5 bash train.sh   # 每 N epoch 验证与存 ckpt，默认 2（也可用 val_and_saving_per_ep）
 #   EP=80 bash train.sh                     # 两阶段训练 epoch 数（也可用 ep）；stage 默认 100 / 150
 #   STAGE1_EP=120 bash train.sh             # 仅 stage 1；stage2 用 STAGE2_EP（或 stage1_ep / stage2_ep）
+#   STAGE=2 STAGE2_USE_KL=False bash train.sh  # stage2 训练成 deterministic AE，不采样、不加 KL
 
 TRAIN_ENV=${TRAIN_ENV:-FEATURIZE}
 
@@ -66,7 +67,7 @@ LR_KL_WARMUP_EP=${LR_KL_WARMUP_EP:-${lr_kl_warmup_ep:-1.0}}  # 对 KL 权重做 
 HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
-L1_WEIGHT=${L1_WEIGHT:-${L1:-0.2}}
+HR_VQ_BETA=${HR_VQ_BETA:-${VQ_BETA:-${vq_beta:-0.25}}}
 # Epochs: STAGE1_EP / STAGE2_EP（或 stage1_ep / stage2_ep）优先；否则用 EP / ep；再否则 stage 默认 100 / 150
 STAGE1_EP=${STAGE1_EP:-${stage1_ep:-}}
 STAGE2_EP=${STAGE2_EP:-${stage2_ep:-}}
@@ -78,8 +79,62 @@ RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir
 USE_LR_HR_ALIGNMENT=${USE_LR_HR_ALIGNMENT:-${use_lr_hr_alignment:-True}}
 ALIGNMENT_LOSS_TYPE=${ALIGNMENT_LOSS_TYPE:-${alignment_loss_type:-scale0_image}}
 ALIGNMENT_LOSS_TYPE_KEY=$(printf '%s' "$ALIGNMENT_LOSS_TYPE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-ALIGNMENT_LOSS_WEIGHT=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-0.5}}
+ALIGNMENT_LOSS_WEIGHT_OVERRIDE=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-}}
 ALIGNMENT_LOSS_WARMUP_EP=${ALIGNMENT_LOSS_WARMUP_EP:-${alignment_loss_warmup_ep:-0.0}}
+STAGE2_USE_KL=${STAGE2_USE_KL:-${stage2_use_kl:-True}}
+STAGE2_USE_KL_KEY=$(printf '%s' "$STAGE2_USE_KL" | tr '[:upper:]' '[:lower:]')
+STAGE2_KL_DISABLED=0
+if [ "$STAGE2_USE_KL_KEY" = "false" ] || [ "$STAGE2_USE_KL_KEY" = "0" ] || [ "$STAGE2_USE_KL_KEY" = "no" ]; then
+  STAGE2_KL_DISABLED=1
+fi
+if [ -z "$ALIGNMENT_LOSS_WEIGHT_OVERRIDE" ] && [ "$STAGE2_KL_DISABLED" = "1" ]; then
+  ALIGNMENT_LOSS_WEIGHT=0.25
+else
+  ALIGNMENT_LOSS_WEIGHT=${ALIGNMENT_LOSS_WEIGHT_OVERRIDE:-0.5}
+fi
+
+# Loss weights. Stage 1 keeps the historical defaults. Stage 2 has separate
+# defaults because short deterministic-AE runs need less smoothing and earlier GAN feedback.
+STAGE1_L1_DEFAULT=0.2
+STAGE1_L2_DEFAULT=1.0
+STAGE1_LPIPS_DEFAULT=0.5
+STAGE1_LPIPS_MIN_RESO_DEFAULT=48
+STAGE1_DISC_WEIGHT_DEFAULT=0.4
+STAGE1_DISC_START_DEFAULT=20
+STAGE1_DISC_WARMUP_DEFAULT=0
+
+if [ "$STAGE2_KL_DISABLED" = "1" ]; then
+  STAGE2_L1_DEFAULT=1.0
+  STAGE2_L2_DEFAULT=0.25
+  STAGE2_LPIPS_DEFAULT=0.25
+  STAGE2_DISC_WEIGHT_DEFAULT=0.2
+  STAGE2_DISC_START_DEFAULT=0.5
+  STAGE2_DISC_WARMUP_DEFAULT=0.5
+else
+  STAGE2_L1_DEFAULT=0.2
+  STAGE2_L2_DEFAULT=1.0
+  STAGE2_LPIPS_DEFAULT=0.5
+  STAGE2_DISC_WEIGHT_DEFAULT=0.4
+  STAGE2_DISC_START_DEFAULT=30
+  STAGE2_DISC_WARMUP_DEFAULT=0
+fi
+STAGE2_LPIPS_MIN_RESO_DEFAULT=48
+
+STAGE1_L1_WEIGHT=${STAGE1_L1_WEIGHT:-${stage1_l1_weight:-${L1_WEIGHT:-${L1:-$STAGE1_L1_DEFAULT}}}}
+STAGE1_L2_WEIGHT=${STAGE1_L2_WEIGHT:-${stage1_l2_weight:-${L2_WEIGHT:-${L2:-$STAGE1_L2_DEFAULT}}}}
+STAGE1_LPIPS_WEIGHT=${STAGE1_LPIPS_WEIGHT:-${stage1_lpips_weight:-${LPIPS_WEIGHT:-${LP:-$STAGE1_LPIPS_DEFAULT}}}}
+STAGE1_LPIPS_MIN_RESO=${STAGE1_LPIPS_MIN_RESO:-${stage1_lpips_min_reso:-${LPIPS_MIN_RESO:-${LPR:-$STAGE1_LPIPS_MIN_RESO_DEFAULT}}}}
+STAGE1_DISC_WEIGHT=${STAGE1_DISC_WEIGHT:-${stage1_disc_weight:-${DISC_WEIGHT:-${LD:-$STAGE1_DISC_WEIGHT_DEFAULT}}}}
+STAGE1_DISC_START_EP=${STAGE1_DISC_START_EP:-${stage1_disc_start_ep:-${DISC_START_EP:-${disc_start_ep:-$STAGE1_DISC_START_DEFAULT}}}}
+STAGE1_DISC_WARMUP_EP=${STAGE1_DISC_WARMUP_EP:-${stage1_disc_warmup_ep:-${DISC_WARMUP_EP:-${disc_warmup_ep:-$STAGE1_DISC_WARMUP_DEFAULT}}}}
+
+STAGE2_L1_WEIGHT=${STAGE2_L1_WEIGHT:-${stage2_l1_weight:-${L1_WEIGHT:-${L1:-$STAGE2_L1_DEFAULT}}}}
+STAGE2_L2_WEIGHT=${STAGE2_L2_WEIGHT:-${stage2_l2_weight:-${L2_WEIGHT:-${L2:-$STAGE2_L2_DEFAULT}}}}
+STAGE2_LPIPS_WEIGHT=${STAGE2_LPIPS_WEIGHT:-${stage2_lpips_weight:-${LPIPS_WEIGHT:-${LP:-$STAGE2_LPIPS_DEFAULT}}}}
+STAGE2_LPIPS_MIN_RESO=${STAGE2_LPIPS_MIN_RESO:-${stage2_lpips_min_reso:-${LPIPS_MIN_RESO:-${LPR:-$STAGE2_LPIPS_MIN_RESO_DEFAULT}}}}
+STAGE2_DISC_WEIGHT=${STAGE2_DISC_WEIGHT:-${stage2_disc_weight:-${DISC_WEIGHT:-${LD:-$STAGE2_DISC_WEIGHT_DEFAULT}}}}
+STAGE2_DISC_START_EP=${STAGE2_DISC_START_EP:-${stage2_disc_start_ep:-${DISC_START_EP:-${disc_start_ep:-$STAGE2_DISC_START_DEFAULT}}}}
+STAGE2_DISC_WARMUP_EP=${STAGE2_DISC_WARMUP_EP:-${stage2_disc_warmup_ep:-${DISC_WARMUP_EP:-${disc_warmup_ep:-$STAGE2_DISC_WARMUP_DEFAULT}}}}
 
 # 输出目录
 STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
@@ -91,14 +146,29 @@ fi
 STAGE1_DEFAULT_EXP_NAME="stage1_lr_vae"
 STAGE1_DEFAULT_EXP_NOTE="Stage 1: train LR VAE to posterior mean tokens"
 if [ "$USE_LR_HR_ALIGNMENT" = "False" ] || [ "$USE_LR_HR_ALIGNMENT" = "false" ] || [ "$USE_LR_HR_ALIGNMENT" = "0" ]; then
-  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_no_alignment"
-  STAGE2_DEFAULT_EXP_NOTE="Stage 2 control: train HR multi-scale VAE on paired LR-HR loader without alignment loss"
+  if [ "$STAGE2_KL_DISABLED" = "1" ]; then
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_ae_no_alignment"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2 control: train deterministic HR multi-scale AE on paired LR-HR loader without alignment loss"
+  else
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_no_alignment"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2 control: train HR multi-scale VAE on paired LR-HR loader without alignment loss"
+  fi
 elif [ "$ALIGNMENT_LOSS_TYPE_KEY" = "latent" ]; then
-  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_latent_aligned"
-  STAGE2_DEFAULT_EXP_NOTE="Stage 2 legacy: train HR multi-scale VAE with first-scale posterior mean aligned to stage1 LR latent"
+  if [ "$STAGE2_KL_DISABLED" = "1" ]; then
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_ae_latent_aligned"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2 legacy: train deterministic HR multi-scale AE with first-scale posterior mean aligned to stage1 LR latent"
+  else
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_latent_aligned"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2 legacy: train HR multi-scale VAE with first-scale posterior mean aligned to stage1 LR latent"
+  fi
 else
-  STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_scale0_img_aligned"
-  STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with decoded scale0 image aligned to resized LR pixels"
+  if [ "$STAGE2_KL_DISABLED" = "1" ]; then
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_ae_scale0_img_aligned"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2: train deterministic HR multi-scale AE with decoded scale0 image aligned to resized LR pixels"
+  else
+    STAGE2_DEFAULT_EXP_NAME="stage2_hr_vae_scale0_img_aligned"
+    STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with decoded scale0 image aligned to resized LR pixels"
+  fi
 fi
 
 if [ "$STAGE" = "1" ]; then
@@ -119,11 +189,16 @@ if [ "$STAGE" = "1" ]; then
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
   --lr_vq_beta="$LR_VQ_BETA" \
   --lr_kl_warmup_ep="$LR_KL_WARMUP_EP" \
+  --vq_beta="$HR_VQ_BETA" \
   --vae_lr="$VAE_LR" \
   --disc_lr="$DISC_LR" \
-  --l1="$L1_WEIGHT" \
-  --ld=0.4 \
-  --disc_start_ep=20 \
+  --l1="$STAGE1_L1_WEIGHT" \
+  --l2="$STAGE1_L2_WEIGHT" \
+  --lp="$STAGE1_LPIPS_WEIGHT" \
+  --lpr="$STAGE1_LPIPS_MIN_RESO" \
+  --ld="$STAGE1_DISC_WEIGHT" \
+  --disc_start_ep="$STAGE1_DISC_START_EP" \
+  --disc_warmup_ep="$STAGE1_DISC_WARMUP_EP" \
   --save_reconstruction_images=True \
   --reconstruction_save_interval="$RECON_SAVE_INTERVAL" \
   --reconstruction_max_samples="$RECON_MAX_SAMPLES" \
@@ -149,6 +224,7 @@ elif [ "$STAGE" = "2" ]; then
   --alignment_loss_type="$ALIGNMENT_LOSS_TYPE" \
   --alignment_loss_weight="$ALIGNMENT_LOSS_WEIGHT" \
   --alignment_loss_warmup_ep="$ALIGNMENT_LOSS_WARMUP_EP" \
+  --stage2_use_kl="$STAGE2_USE_KL" \
   "${LR_VAE_RESUME_ARGS[@]}" \
   --lbs=4 \
   --ep="${STAGE2_EP:-${EP_COMMON:-150}}" \
@@ -159,12 +235,17 @@ elif [ "$STAGE" = "2" ]; then
   --lr_vq_beta="$LR_VQ_BETA" \
   --lr_kl_warmup_ep="$LR_KL_WARMUP_EP" \
   --vocab_width="$HR_VOCAB_WIDTH" \
+  --vq_beta="$HR_VQ_BETA" \
   --patch_nums "${PATCH_NUMS[@]}" \
   --vae_lr="$VAE_LR" \
   --disc_lr="$DISC_LR" \
-  --l1="$L1_WEIGHT" \
-  --ld=0.4 \
-  --disc_start_ep=30 \
+  --l1="$STAGE2_L1_WEIGHT" \
+  --l2="$STAGE2_L2_WEIGHT" \
+  --lp="$STAGE2_LPIPS_WEIGHT" \
+  --lpr="$STAGE2_LPIPS_MIN_RESO" \
+  --ld="$STAGE2_DISC_WEIGHT" \
+  --disc_start_ep="$STAGE2_DISC_START_EP" \
+  --disc_warmup_ep="$STAGE2_DISC_WARMUP_EP" \
   --save_reconstruction_images=True \
   --reconstruction_save_interval="$RECON_SAVE_INTERVAL" \
   --reconstruction_max_samples="$RECON_MAX_SAMPLES" \

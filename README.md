@@ -160,6 +160,33 @@ TRAIN_LOG_POINTS_PER_EPOCH=200 \
 STAGE2_EP=3 \
 bash train.sh
 
+# 当前建议优先试：stage2 deterministic AE（去掉 stage2 KL 和训练采样）+ scale0 图像空间对齐
+# 适合“只要重建准确性，不需要 latent 多样性”的实验；预期日志里 Lkl=0。
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
+STAGE=2 \
+EXP_NAME=stage2_scale0_img_align_lr256_patch4to16_no_kl \
+EXP_NOTE="stage2 deterministic AE; scale0 decoded image aligned to LR pixels; no KL or sampling" \
+RECONSTRUCTION_DIR_NAME=stage2_scale0_img_align_lr256_patch4to16_no_kl \
+LR_FOLDER=LR \
+HR_FOLDER=HR \
+LR_IMG_SIZE=256 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
+STAGE2_DISC_WEIGHT=0.2 \
+STAGE2_DISC_START_EP=0.5 \
+STAGE2_DISC_WARMUP_EP=0.5 \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=100 \
+STAGE2_EP=3 \
+bash train.sh
+
 # 如何查看torch run 命令是否被kill
 ps -ef | grep torchrun
 
@@ -178,7 +205,25 @@ ps -ef | grep torchrun
 # 可用 EXP_NOTE（或小写 exp_note）覆盖默认 --exp_note。
 
 # l1
-# 可用 L1（或 L1_WEIGHT）覆盖默认 --l1（默认 0.2）。
+# 可用 L1（或 L1_WEIGHT）覆盖两阶段默认 --l1。
+# 也可用 STAGE1_L1_WEIGHT / STAGE2_L1_WEIGHT 分别覆盖；当前推荐 stage2 去糊先试 1.0。
+
+# l2
+# 可用 L2（或 L2_WEIGHT）覆盖两阶段默认 --l2。
+# 也可用 STAGE1_L2_WEIGHT / STAGE2_L2_WEIGHT 分别覆盖；stage2 去糊建议 0.25，避免 MSE 太强导致平滑。
+
+# lpips
+# 可用 LP（或 LPIPS_WEIGHT）覆盖两阶段默认 --lp；trainer 内部会把 --lp 乘 2。
+# 也可用 STAGE1_LPIPS_WEIGHT / STAGE2_LPIPS_WEIGHT 分别覆盖；stage2 去糊建议 0.25（实际约 0.5）。
+
+# disc loss
+# 可用 LD（或 DISC_WEIGHT）覆盖两阶段默认 --ld。
+# 也可用 STAGE1_DISC_WEIGHT / STAGE2_DISC_WEIGHT 分别覆盖；stage2 去糊建议 0.2。
+# 可用 DISC_START_EP / DISC_WARMUP_EP 做通用覆盖，或用 STAGE2_DISC_START_EP / STAGE2_DISC_WARMUP_EP 只覆盖 stage2。
+# 注意：如果 STAGE2_EP=3 但 STAGE2_DISC_START_EP=30，GAN 完全不会启动，图像偏糊是正常的。
+
+# hr_vq_beta
+# 可用 HR_VQ_BETA（或 VQ_BETA / vq_beta）覆盖 HR VAE 的 --vq_beta；STAGE2_USE_KL=False 时该项不进入 stage2 loss。
 
 # lr_vq_beta
 # 可用 LR_VQ_BETA（或小写 lr_vq_beta）覆盖默认 --lr_vq_beta（默认 1e-3）。
@@ -193,9 +238,13 @@ ps -ef | grep torchrun
 
 # stage2 alignment
 # 默认 ALIGNMENT_LOSS_TYPE=scale0_image，不需要 STAGE1_CKPT。
-# 可用 ALIGNMENT_LOSS_WEIGHT 调整 scale0 图像 loss 权重，默认 0.5。
+# 可用 ALIGNMENT_LOSS_WEIGHT 调整 scale0 图像 loss 权重；默认 VAE 模式 0.5，STAGE2_USE_KL=False 时 0.25。
 # 可用 ALIGNMENT_LOSS_WARMUP_EP 给 scale0 loss 做线性 warmup，默认 0。
 # 如果要复现实验旧版本 latent 对齐，设置 ALIGNMENT_LOSS_TYPE=latent 并提供 STAGE1_CKPT。
+
+# stage2 KL / AE mode
+# 默认 STAGE2_USE_KL=True，保持原 stage2 VAE：训练时采样 latent，并加入 HR 多尺度 KL。
+# 设置 STAGE2_USE_KL=False 时，stage2 训练和验证都走 posterior mean，Lkl=0，更像普通 autoencoder。
 
 # test
 python eval_stage1_ckpt.py \

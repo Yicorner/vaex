@@ -21,7 +21,8 @@ description: Explain what this repository builds, where the core modules live, a
 - 早期版本：离散 VQ-VAE
 - 当前版本：连续 VAE
   - 使用 Gaussian reparameterization
-  - 使用 KL divergence 约束 latent 分布
+  - 可使用 KL divergence 约束 latent 分布
+  - Stage2 可通过 `stage2_use_kl=False` 切换为 deterministic autoencoder，用 posterior mean 重建并关闭 KL
 
 项目的核心设计不再依赖离散 codebook，而是通过多尺度连续 latent 来表达从粗到细的图像信息。
 
@@ -77,19 +78,20 @@ myvaex/
 
 - HR 重建训练
 - 两阶段训练中的第二阶段主模型
+- 追求确定性重建时的 stage2 multi-scale AE（`stage2_use_kl=False`）
 
 ### 3.2 连续多尺度量化器
 
 文件：`models/quant.py`
 
-职责：将 encoder 特征分解为多个尺度的连续 latent，并计算 KL loss。
+职责：将 encoder 特征分解为多个尺度的连续 latent；VAE 模式下计算 KL loss，AE 模式下使用 posterior mean 并返回零 KL。
 
 核心逻辑：
 
 1. 对 encoder 输出做多尺度残差分解。
 2. 每个尺度从当前 residual 中提取该尺度特征。
 3. 通过 `mean_logvar_conv` 生成 Gaussian posterior 参数。
-4. 采样得到当前尺度 latent。
+4. VAE 模式采样得到当前尺度 latent；AE 模式直接取 posterior mean。
 5. 上采样并经 `quant_resi` 精炼。
 6. 累加到 `f_hat`，继续拟合更细尺度。
 

@@ -78,6 +78,7 @@ def build_two_stage_trainer(args: arg_util.Args):
     # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
     args.alignment_loss_type = TwoStageVAETrainer._normalize_alignment_loss_type(args.alignment_loss_type)
+    args.stage2_use_kl = TwoStageVAETrainer._normalize_bool(args.stage2_use_kl)
 
     load_mode = 'lr_only' if args.training_stage == 1 else 'both'
     dataset_train, dataset_val = build_lr_hr_dataset(
@@ -130,6 +131,12 @@ def build_two_stage_trainer(args: arg_util.Args):
 
     count_p = lambda m: f'{sum(p.numel() for p in m.parameters()) / 1e6:.2f}'
     print(f'[PT][#para] HR_VAE={count_p(vae_wo_ddp)}, LR_VAE={count_p(lr_vae_wo_ddp)}, Disc={count_p(disc_wo_ddp)}')
+    print(
+        f'[loss weights] l1={args.l1}, l2={args.l2}, lp={args.lp} '
+        f'(trainer uses effective LPIPS weight {args.lp * 2:g}), '
+        f'ld={args.ld}, vq_beta={args.vq_beta}, '
+        f'disc_start_ep={args.disc_start_ep}, disc_warmup_ep={args.disc_warmup_ep}'
+    )
 
     expected_lr_latent = args.lr_img_size // lr_vae_wo_ddp.downsample
     expected_hr_first_scale = args.patch_nums[0]
@@ -144,6 +151,10 @@ def build_two_stage_trainer(args: arg_util.Args):
         print(
             f'[alignment] enabled={args.use_lr_hr_alignment}, type={args.alignment_loss_type}, '
             f'weight={args.alignment_loss_weight}, warmup_ep={args.alignment_loss_warmup_ep}'
+        )
+        print(
+            f'[stage2 mode] stage2_use_kl={args.stage2_use_kl}; '
+            f'{"VAE sampling + KL" if args.stage2_use_kl else "deterministic AE, posterior mean only, KL=0"}'
         )
         if args.use_lr_hr_alignment and args.alignment_loss_type == 'scale0_image':
             print('[alignment] scale0_image decodes HR scale[0] and compares it to resized LR pixels; stage1 LR latent is not required.')
@@ -239,6 +250,7 @@ def build_two_stage_trainer(args: arg_util.Args):
         alignment_loss_weight=args.alignment_loss_weight,
         alignment_loss_warmup_ep=args.alignment_loss_warmup_ep,
         alignment_scale_index=0,
+        stage2_use_kl=args.stage2_use_kl,
         dbg_unused=args.dbg_unused,
         dbg_nan=args.dbg_nan,
     )

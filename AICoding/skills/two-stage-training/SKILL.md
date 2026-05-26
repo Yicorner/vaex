@@ -38,6 +38,9 @@ DATA_PATH/
 | `alignment_loss_type=latent` | 旧路径：对齐 HR scale0 posterior mean 与 stage1 LR VAE latent |
 | `alignment_loss_weight=0.5` | 对齐损失权重 |
 | `alignment_loss_warmup_ep=0.0` | 对齐损失线性 warmup epoch 数，0 表示不启用 |
+| `stage2_use_kl=True` | 兼容旧路径：stage2 训练时采样 latent，并加入 HR 多尺度 KL |
+| `stage2_use_kl=False` | 新 AE 路径：stage2 训练时也使用 posterior mean，`Lkl=0`，不做采样 |
+| `l1/l2/lp/ld` | 主重建、LPIPS、GAN loss 权重；`lp` 在 trainer 内会再乘 2 |
 
 ### 2.1 Stage 1
 
@@ -56,9 +59,13 @@ L_total = L1_rec * wei_l1 + LPIPS * wei_lpips + KL * lr_vq_beta + L_adv * wei_di
 损失形式：
 
 ```text
-L_total = L_hr_rec + KL + L_adv * wei_disc + L_scale0_img * alignment_loss_weight
+L_total = L_hr_rec + stage2_kl_term + L_adv * wei_disc + L_scale0_img * alignment_loss_weight
+L_hr_rec = l1 * L1(rec, HR) + l2 * MSE(rec, HR) + (2 * lp) * LPIPS(rec, HR)
 L_scale0_img = L1(DecodeStage2Scale0(HR_scale0_mean), Resize(LR_image, decoded_scale0_size))
+stage2_kl_term = KL when stage2_use_kl=True, otherwise 0
 ```
+
+当目标是最高重建准确性而不需要 latent 多样性时，推荐实验开关为 `stage2_use_kl=False`。这时 stage2 更像一个 deterministic multi-scale autoencoder：训练和推理都走 posterior mean，`mean_logvar_conv` 的 logvar 分支仍保留在结构里用于 checkpoint 兼容，但不会贡献 KL loss 或采样噪声。
 
 ---
 
@@ -68,7 +75,7 @@ L_scale0_img = L1(DecodeStage2Scale0(HR_scale0_mean), Resize(LR_image, decoded_s
 
 当前默认实现（`alignment_loss_type=scale0_image`）的关键点：
 
-1. HR VAE 主 forward 仍然一次性完成全尺度重建与 KL。
+1. HR VAE 主 forward 仍然一次性完成全尺度重建；若 `stage2_use_kl=True`，同时计算多尺度 KL。
 2. 同一次 forward 暴露 `scale_index=0` 的 posterior mean，记作 `hr_scale0_mean`。
 3. 调用 HR VAE 共享 decoder：先把 `hr_scale0_mean` 按正常 scale 累积路径上采样、过 `quant_resi` 和 `post_quant_conv`，再 decode 成 scale0-only 图像。
 4. 将 `inp_lr` resize 到 scale0-only 图像大小，默认是 `256x256`。
@@ -95,6 +102,29 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 ```
 
 这个实验用于判断问题来自 stage2 入口/paired 数据流程，还是来自 `L_align` 约束本身。
+
+关闭 stage2 KL 的实验入口：
+
+```bash
+STAGE=2 STAGE2_USE_KL=False ALIGNMENT_LOSS_TYPE=scale0_image bash train.sh
+```
+
+预期现象：Stage2 Debug 和进度日志中的 `Lkl` 为 `0.00e+00`；保存重建图和验证 forward 都是 deterministic mean 路径。
+
+如果只跑 `STAGE2_EP=2~3` 的短实验，不要沿用 `disc_start_ep=30`，否则 GAN 分支完全不启动，重建偏糊是预期的。短实验可以从下面这组较稳的去糊配比开始：
+
+```bash
+STAGE2_USE_KL=False
+STAGE2_L1_WEIGHT=1.0
+STAGE2_L2_WEIGHT=0.25
+STAGE2_LPIPS_WEIGHT=0.25
+ALIGNMENT_LOSS_WEIGHT=0.25
+STAGE2_DISC_WEIGHT=0.2
+STAGE2_DISC_START_EP=0.5
+STAGE2_DISC_WARMUP_EP=0.5
+```
+
+这组配比的意图：降低 MSE 平滑倾向，用 L1 保结构，用适度 LPIPS/GAN 提高清晰度，同时避免 GAN 和 scale0 alignment 过强导致伪细节或低频约束压过 HR 重建。
 
 ---
 
@@ -124,7 +154,8 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
    - 建议范围 `1e-4 ~ 1e-3`，并搭配 `lr_kl_warmup_ep >= 1.0` 做线性 warmup
    - 判定塌缩的信号：`Lkl` 在前几百个 iter 保持在 10+ 量级；保存的重建图无结构只有低频成分
 9. 保存训练期对比图必须走 **eval 模式 / `posterior.mode()`**（`_deterministic_reconstruction`）：
-   - 训练期前向使用 `posterior.sample()`，latent 上会再叠一层高斯噪声
+   - 当 `stage2_use_kl=True` 时，训练期前向使用 `posterior.sample()`，latent 上会再叠一层高斯噪声
+   - 当 `stage2_use_kl=False` 时，训练期和保存图都使用 `posterior.mode()`，这是预期行为
    - 如果保存图用训练期 forward 的输出，早期会看到比 `eval_ep` PSNR 更糟糕的图像——这属于可视化 bug，不是模型 bug
 10. `LR_VAE._init_mean_logvar_conv()` 的初始化结果不能被二次通用初始化覆盖：
    - 该函数会把 `mean_logvar_conv` 的 logvar 偏置设为 `-2.0`，用于让 stage 1 起步时 `posterior std` 低于 1，避免一开始就贴近先验
@@ -150,6 +181,7 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 --training_stage=1
 --training_stage=2 --use_lr_hr_alignment=True
 --alignment_loss_type=scale0_image --alignment_loss_weight=0.5
+--stage2_use_kl=False
 ```
 
 ### 5.3 关闭判别器
@@ -167,6 +199,7 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 - LR 侧目标是图像像素还是 legacy `5x5` latent
 - 当前使用的是 `scale0_image` 还是 legacy `latent`
 - HR 侧取的是采样值、均值，还是其他形式的 latent；默认取 posterior mean 来降低辅助 loss 噪声
+- Stage2 主重建路径是否需要 KL/采样；追求准确重建时优先试 `stage2_use_kl=False`
 - 验证流程是否同步统计了 alignment loss
 - checkpoint 恢复后 `training_stage` 是否正确回填
 
