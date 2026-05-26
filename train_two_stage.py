@@ -77,6 +77,9 @@ def build_two_stage_trainer(args: arg_util.Args):
     [print(l) for l in auto_resume_info]
     # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
+    args.img_channels = int(args.img_channels)
+    if args.img_channels not in (1, 3):
+        raise ValueError(f'img_channels must be 1 or 3, got {args.img_channels}')
     args.alignment_loss_type = TwoStageVAETrainer._normalize_alignment_loss_type(args.alignment_loss_type)
     args.stage2_use_kl = TwoStageVAETrainer._normalize_bool(args.stage2_use_kl)
 
@@ -84,6 +87,7 @@ def build_two_stage_trainer(args: arg_util.Args):
     dataset_train, dataset_val = build_lr_hr_dataset(
         args.data, load_mode=load_mode,
         lr_folder=args.lr_folder, hr_folder=args.hr_folder,
+        img_channels=args.img_channels,
     )
     ld_train = DataLoader(
         dataset=dataset_train,
@@ -114,7 +118,7 @@ def build_two_stage_trainer(args: arg_util.Args):
     iters_train = len(ld_train)
     args.iters_per_ep = iters_train
     ld_train = iter(ld_train)
-    print(f'[dataloader] gbs={args.bs}, lbs={args.lbs}, iters_train={iters_train}, mode={load_mode}')
+    print(f'[dataloader] gbs={args.bs}, lbs={args.lbs}, iters_train={iters_train}, mode={load_mode}, img_channels={args.img_channels}')
 
     from torch.nn.parallel import DistributedDataParallel as DDP
     from models import DinoDisc, LR_VAE, VQVAE, build_two_stage_models

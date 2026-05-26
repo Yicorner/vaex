@@ -25,6 +25,7 @@ class VQVAE(nn.Module):
         v_patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16), # number of patches for each scale
         test_mode=True,
         debug_kl_count_limit: int = 3,  # limit for printing KL debug info
+        img_channels: int = 3,
         # Legacy parameters kept for compatibility but not used:
         vocab_size=None,        # not used in continuous VAE
         using_znorm=None,       # not used in continuous VAE
@@ -33,10 +34,11 @@ class VQVAE(nn.Module):
         self.v_patch_nums = v_patch_nums
         self.test_mode = test_mode
         self.Cvae = z_channels
+        self.img_channels = int(img_channels)
         # ddconfig is copied from https://github.com/CompVis/latent-diffusion/blob/e66308c7f2e64cb581c6d27ab6fbeb846828253b/models/first_stage_models/vq-f16/config.yaml
         ddconfig = dict(
             dropout=dropout, ch=ch, z_channels=z_channels,
-            in_channels=3, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,   # from vq-f16/config.yaml above
+            in_channels=self.img_channels, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,   # from vq-f16/config.yaml above
             using_sa=True, using_mid_sa=True,                           # from vq-f16/config.yaml above
             # resamp_with_conv=True,   # always True, removed.
         )
@@ -71,14 +73,14 @@ class VQVAE(nn.Module):
          for continuous multi-scale VAE training.
 
         Args:
-            inp: input images [B, 3, H, W]
+            inp: input images [B, img_channels, H, W]
             ret_usages: whether to return usage statistics (kept for compatibility)
             ret_scale_posterior_stats: whether to also return one scale's posterior mean/logvar
             scale_index: index into `v_patch_nums` when returning posterior stats
             use_kl: if False, train as deterministic autoencoder with zero KL loss
 
         Returns:
-            rec_B3HW: reconstructed images [B, 3, H, W]
+            rec_B3HW: reconstructed images [B, img_channels, H, W]
             usages: usage statistics (None for continuous VAE)
             kl_loss: KL divergence loss
             optional scale_mean, scale_logvar: posterior stats for alignment

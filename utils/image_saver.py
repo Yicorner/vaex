@@ -52,6 +52,44 @@ def tensor_to_pil_image(tensor: torch.Tensor) -> Image.Image:
         return Image.fromarray(img_np, mode='RGB')
 
 
+def tensor_to_metric_np_01(tensor: torch.Tensor) -> np.ndarray:
+    """Convert `[C,H,W]` in [-1, 1] to a PSNR/SSIM-ready numpy image.
+
+    RGB images become HWC. Single-channel medical images become HW so skimage
+    computes true grayscale SSIM instead of treating a singleton channel as RGB.
+    """
+    arr = ((tensor.detach().cpu().float().numpy() + 1.0) * 0.5).clip(0.0, 1.0)
+    if arr.shape[0] == 1:
+        return arr[0]
+    return np.transpose(arr, (1, 2, 0))
+
+
+def compute_psnr_ssim(pred: torch.Tensor, target: torch.Tensor) -> Dict[str, Any]:
+    """Compute PSNR/SSIM for `[B,C,H,W]` tensors in [-1, 1].
+
+    `C=1` uses grayscale HW arrays. `C=3` uses HWC arrays with `channel_axis=2`.
+    """
+    from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+
+    psnrs: List[float] = []
+    ssims: List[float] = []
+    for i in range(pred.shape[0]):
+        pred_np = tensor_to_metric_np_01(pred[i])
+        target_np = tensor_to_metric_np_01(target[i])
+        psnrs.append(float(peak_signal_noise_ratio(target_np, pred_np, data_range=1.0)))
+        if target_np.ndim == 2:
+            ssims.append(float(structural_similarity(target_np, pred_np, data_range=1.0)))
+        else:
+            ssims.append(float(structural_similarity(target_np, pred_np, channel_axis=2, data_range=1.0)))
+
+    return {
+        "psnr_mean": float(np.mean(psnrs)) if psnrs else 0.0,
+        "ssim_mean": float(np.mean(ssims)) if ssims else 0.0,
+        "psnr_list": psnrs,
+        "ssim_list": ssims,
+    }
+
+
 def save_reconstruction_comparison(
     original: torch.Tensor,
     reconstructed: torch.Tensor,

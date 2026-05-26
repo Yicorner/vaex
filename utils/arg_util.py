@@ -148,6 +148,7 @@ class Args(Tap):
     # data
     subset: float = 1.0         # < 1.0 for use subset
     img_size: int = 256
+    img_channels: int = 3       # raw image/model channels; set 1 for grayscale medical images, 3 for RGB compatibility
     lr_folder: str = 'LR'       # subdirectory name for LR images under each split
     hr_folder: str = 'HR'       # subdirectory name for HR images under each split
     mid_reso: float = 1.125     # aug: first resize to mid_reso = 1.125 * data_load_reso, then crop to data_load_reso

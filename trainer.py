@@ -10,8 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from torch.nn.parallel import DistributedDataParallel as DDP
-import numpy as np
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from models import ContinuousMultiScaleQuantizer, VQVAE, DinoDisc
 from utils import arg_util, misc, nan
@@ -19,7 +17,7 @@ from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
-from utils.image_saver import save_reconstruction_comparison
+from utils.image_saver import compute_psnr_ssim, save_reconstruction_comparison
 
 # from memory_profiler import profile
 
@@ -83,6 +81,15 @@ class VAETrainer(object):
         if self.bcr > 0:
             self.bcr_strong_aug = DiffAug(prob=1, cutout=bcr_cut)
         self.disc_grad_ckpt = disc_grad_ckpt
+
+    @staticmethod
+    def _as_rgb_for_pretrained(img: torch.Tensor) -> torch.Tensor:
+        if img.shape[1] == 1:
+            return img.repeat(1, 3, 1, 1)
+        return img
+
+    def _disc_input_pm1(self, img: torch.Tensor) -> torch.Tensor:
+        return self._as_rgb_for_pretrained(img).float().clamp(-1.0, 1.0)
         
     @torch.no_grad()
     def eval_ep(self, ld_val, max_batches=None):
@@ -110,31 +117,10 @@ class VAETrainer(object):
             rec_B3HW, usage, Lq = self.vae_wo_ddp(inp)
             rec_loss += F.l1_loss(rec_B3HW, inp)
             
-            # Convert from [-1, 1] to [0, 1] for PSNR/SSIM calculation
-            inp_norm = (inp + 1.0) / 2.0
-            rec_norm = (rec_B3HW + 1.0) / 2.0
-            inp_norm = inp_norm.clamp(0, 1)
-            rec_norm = rec_norm.clamp(0, 1)
-            
-            # Calculate PSNR and SSIM for each image in the batch
-            batch_size = inp_norm.shape[0]
-            for i in range(batch_size):
-                # Convert to numpy and transpose from [C, H, W] to [H, W, C]
-                inp_img = inp_norm[i].cpu().numpy().transpose(1, 2, 0)
-                rec_img = rec_norm[i].cpu().numpy().transpose(1, 2, 0)
-                
-                # Calculate PSNR
-                psnr_val = peak_signal_noise_ratio(inp_img, rec_img, data_range=1.0)
-                psnr_sum += psnr_val
-                
-                # Calculate SSIM (for RGB images)
-                # Try channel_axis first (newer skimage), fallback to multichannel (older skimage)
-                try:
-                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, channel_axis=2)
-                except TypeError:
-                    # Fallback for older skimage versions
-                    ssim_val = structural_similarity(inp_img, rec_img, data_range=1.0, multichannel=True)
-                ssim_sum += ssim_val
+            batch_size = inp.shape[0]
+            metrics = compute_psnr_ssim(rec_B3HW, inp)
+            psnr_sum += metrics['psnr_mean'] * batch_size
+            ssim_sum += metrics['ssim_mean'] * batch_size
             
             tot += batch_size
             batch_count += 1
@@ -200,7 +186,10 @@ class VAETrainer(object):
             if using_lpips:
                 self.lpips_loss.forward
                 
-                Lpip = self.lpips_loss(inp, rec_B3HW)
+                Lpip = self.lpips_loss(
+                    self._as_rgb_for_pretrained(inp),
+                    self._as_rgb_for_pretrained(rec_B3HW),
+                )
                 Lpip = torch.mean(Lpip)
                 Lnll = Lrec + self.wei_lpips * Lpip
             else:
@@ -213,7 +202,7 @@ class VAETrainer(object):
                 self.disc_wo_ddp.eval()
                 with self.disc_opt.amp_ctx:
                     self.disc_wo_ddp.forward
-                    Lg = -self.disc_wo_ddp(self.daug.aug(rec_B3HW, fade_blur_schedule), grad_ckpt=False).mean()  # todo: aug or not?
+                    Lg = -self.disc_wo_ddp(self.daug.aug(self._disc_input_pm1(rec_B3HW), fade_blur_schedule), grad_ckpt=False).mean()  # todo: aug or not?
                 self.disc_wo_ddp.train()
                 
                 wei_g = warmup_disc_schedule * self.wei_disc
@@ -283,7 +272,7 @@ class VAETrainer(object):
                 for d in self.disc_params: d.requires_grad = True
                 with self.disc_opt.amp_ctx:
                     self.disc_wo_ddp.forward
-                    logits = self.disc(self.daug.aug(inp_rec_no_grad, fade_blur_schedule), grad_ckpt=self.disc_grad_ckpt).float()
+                    logits = self.disc(self.daug.aug(self._disc_input_pm1(inp_rec_no_grad), fade_blur_schedule), grad_ckpt=self.disc_grad_ckpt).float()
                 
                 logits_real, logits_fake = logits[:B], logits[B:]
                 acc_real, acc_fake = (logits_real.data > 0).float().mean().mul_(100), (logits_fake.data < 0).float().mean().mul_(100)
@@ -294,7 +283,7 @@ class VAETrainer(object):
                 with maybe_record_function('Disc_bCR'):
                     with self.disc_opt.amp_ctx:
                         self.disc_wo_ddp.forward
-                        logits2 = self.disc(self.bcr_strong_aug.aug(inp_rec_no_grad, 0.0), grad_ckpt=self.disc_grad_ckpt).float()
+                        logits2 = self.disc(self.bcr_strong_aug.aug(self._disc_input_pm1(inp_rec_no_grad), 0.0), grad_ckpt=self.disc_grad_ckpt).float()
                     Lbcr = F.mse_loss(logits2, logits).mul_(self.bcr)
                     Ld += Lbcr
             else:
@@ -306,7 +295,7 @@ class VAETrainer(object):
                     with torch.cuda.amp.autocast(enabled=False):    # todo: why AMP is disabled in this disc forward?
                         inp.requires_grad_(True)
                         self.disc_wo_ddp.forward
-                        grad_real = torch.autograd.grad(outputs=self.disc(self.daug.aug(inp, fade_blur_schedule), grad_ckpt=False).sum(), inputs=inp, create_graph=True)[0]
+                        grad_real = torch.autograd.grad(outputs=self.disc(self.daug.aug(self._disc_input_pm1(inp), fade_blur_schedule), grad_ckpt=False).sum(), inputs=inp, create_graph=True)[0]
                         Lreg = grad_real.square().flatten(1).sum(dim=1).mean()
                         Ld += self.reg * Lreg
                         Lreg = Lreg.item()

@@ -37,11 +37,20 @@ def center_crop_arr(pil_image, image_size, min_crop_frac=0.9, max_crop_frac=1.0)
     crop_x = (arr.shape[1] - image_size) // 2
     return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
+def pil_mode_from_channels(img_channels: int) -> str:
+    if int(img_channels) == 1:
+        return 'L'
+    if int(img_channels) == 3:
+        return 'RGB'
+    raise ValueError(f'img_channels must be 1 or 3, got {img_channels}')
+
+
 class DIV2KData(Dataset):
-    def __init__(self, data_dir: str, transform: Optional[transforms.Compose] = None, augment=False):
+    def __init__(self, data_dir: str, transform: Optional[transforms.Compose] = None, augment=False, img_channels: int = 3):
         self.data_dir = data_dir
         self.transform = transform
         self.augment = augment
+        self.image_mode = pil_mode_from_channels(img_channels)
         
         if os.path.isdir(os.path.join(data_dir, 'HR')):
             self.data = [os.path.join(os.path.join(data_dir, 'HR'),data_name) for data_name in os.listdir(os.path.join(data_dir, 'HR'))]
@@ -53,7 +62,7 @@ class DIV2KData(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        img = Image.open(self.data[idx]).convert('RGB')
+        img = Image.open(self.data[idx]).convert(self.image_mode)
         # if self.target_shape:
         #     img = img.resize(self.target_shape, Image.BICUBIC)
         if self.augment:

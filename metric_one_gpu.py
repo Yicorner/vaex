@@ -67,6 +67,15 @@ def img2tensor(img):
     img = np.ascontiguousarray(img, dtype=np.float32)
     tensor = torch.from_numpy(img)
     return tensor
+
+
+def read_ckpt_arg(ckpt, key, default):
+    args_state = ckpt.get('args', {}) if isinstance(ckpt, dict) else {}
+    if isinstance(args_state, dict):
+        return args_state.get(key, default)
+    return default
+
+
 def rgb2ycbcr_pt(img, y_only=False):
     """Convert RGB images to YCbCr images (PyTorch version).
     It implements the ITU-R BT.601 conversion for standard-definition television. See more details in
@@ -77,6 +86,9 @@ def rgb2ycbcr_pt(img, y_only=False):
     Returns:
         (Tensor): converted images with the shape (n, 3/1, h, w), the range [0, 1], float.
     """
+    if img.shape[1] == 1:
+        return img if y_only else img.repeat(1, 3, 1, 1)
+
     if y_only:
         weight = torch.tensor([[65.481], [128.553], [24.966]]).to(img)
         out_img = torch.matmul(img.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2) + 16.0
@@ -100,11 +112,13 @@ def write_metrics_to_file(filename, metric_name, values):
         
 def get_img(args, ld_val, maxtot, ckpt_paths):
     for vae_ckpt in ckpt_paths:
-        vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, 
-                    test_mode=True, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums).to(args.device).eval()
-        # print(torch.load(vae_ckpt, map_location='cpu')['trainer']['vae_wo_ddp'])
-        
         load_ckpt = torch.load(vae_ckpt, map_location='cpu')
+        img_channels = int(read_ckpt_arg(load_ckpt, 'img_channels', getattr(args, 'img_channels', 3)))
+        vae = VQVAE(vocab_size=args.vocab_size, z_channels=args.vocab_width, ch=args.ch, 
+                    test_mode=True, share_quant_resi=args.share_quant_resi, v_patch_nums=args.patch_nums,
+                    img_channels=img_channels).to(args.device).eval()
+        # print(torch.load(vae_ckpt, map_location='cpu')['trainer']['vae_wo_ddp'])
+
         if 'trainer' in  load_ckpt.keys():
             load_ckpt = load_ckpt['trainer']['vae_ema']
         vae.load_state_dict(load_ckpt)
@@ -146,6 +160,12 @@ def get_img(args, ld_val, maxtot, ckpt_paths):
                     _data = data[i].transpose(1,2,0)
                     _rec_B3HW = rec_B3HW[i].transpose(1,2,0)
                     _vaex_first_rec = vaex_first_rec[i].transpose(1,2,0)
+                    if _data.ndim == 3 and _data.shape[-1] == 1:
+                        _data = _data[..., 0]
+                    if _rec_B3HW.ndim == 3 and _rec_B3HW.shape[-1] == 1:
+                        _rec_B3HW = _rec_B3HW[..., 0]
+                    if _vaex_first_rec.ndim == 3 and _vaex_first_rec.shape[-1] == 1:
+                        _vaex_first_rec = _vaex_first_rec[..., 0]
                     Image.fromarray(_rec_B3HW).save(os.path.join(predict_dir,f"{index*data.shape[0]+i}.png"))
                     Image.fromarray(_data).save(os.path.join(gt_dir,f"{index*data.shape[0]+i}.png"))
                     Image.fromarray(_vaex_first_rec).save(os.path.join(vaex_first_rec_dir,f"{index*data.shape[0]+i}.png"))
@@ -240,12 +260,14 @@ if __name__ == "__main__":
     maxtot = -1 # -1
     args.batch_size= 4
     args.device = "cuda"
+    args.img_channels = getattr(args, 'img_channels', 3)
 
     val_aug = [
             transforms.ToTensor(), normalize_01_into_pm1,
         ]
     val_aug = transforms.Compose(val_aug)
-    val_set = DIV2KData(data_dir=os.path.join(args.data,"val"), transform=val_aug,augment=False)  
+    val_set = DIV2KData(data_dir=os.path.join(args.data,"val"), transform=val_aug,augment=False,
+                        img_channels=args.img_channels)
     ld_val = DataLoader(
         dataset=val_set, num_workers=args.workers, pin_memory=True, batch_size=args.batch_size, shuffle=False,
     )

@@ -145,3 +145,10 @@ myvaex/
 - 两阶段训练与对齐：`AICoding/skills/two-stage-training/`
 - 判别器损失兼容性：`AICoding/skills/discriminator-loss-compatibility/`
 - 训练运维：`AICoding/skills/training-operations/`
+
+## 6. 单通道灰度模式
+
+- 医学灰度实验用 `IMG_CHANNELS=1` / `--img_channels=1`，默认 `3` 只为兼容旧 RGB 实验。
+- `models/vqvae.py` 和 `models/lr_vae.py` 都从 `img_channels` 配置输入/输出通道；切换后 checkpoint 形状不兼容，需要重新训练。
+- 数据入口在 `utils/data.py`、`utils/data_loader.py`、`utils/data_lr_hr.py`，`img_channels=1` 时用 PIL `L` 读取。
+- 指标统一走 `utils/image_saver.compute_psnr_ssim()`：灰度为 `H x W`，RGB 为 HWC + `channel_axis=2`。

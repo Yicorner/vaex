@@ -265,6 +265,22 @@ python eval_stage1_ckpt.py \
   --batch_size 4
 ```
 
+## 7. 单通道灰度医学影像
+
+- `arg_util.py` / `train.sh` 支持 `img_channels` / `IMG_CHANNELS`，默认 `3` 保持旧 RGB checkpoint 兼容；医学灰度新实验设 `IMG_CHANNELS=1`。
+- `IMG_CHANNELS=1` 时，数据加载以 PIL `L` 模式读取，VAE / LR_VAE 的 encoder 输入和 decoder 输出都是 `[B,1,H,W]`。这会改变首尾卷积形状，所以灰度模型必须重新训练，不能直接混用 RGB checkpoint。
+- LPIPS 和 DINO discriminator 是 RGB 预训练网络，trainer 内部会在调用这些分支前把 `[B,1,H,W]` repeat 成 `[B,3,H,W]`；主重建 loss 仍在单通道上算。
+- PSNR / SSIM 通过 `utils.image_saver.compute_psnr_ssim()` 统一计算：`C=1` 用灰度 `H x W`，`C=3` 用 HWC + `channel_axis=2`。
+- 推荐入口：
+
+```bash
+IMG_CHANNELS=1 \
+STAGE=2 \
+STAGE2_USE_KL=False \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+bash train.sh
+```
+
 说明：
 
 - 脚本只接收一个测试目录参数 `--test_dir`，直接读取该目录下的图片文件（不会再拼接 `LR/HR` 子目录）

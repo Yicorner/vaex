@@ -163,6 +163,9 @@ def build_things_from_args(args: arg_util.Args):
     tb_lg = create_tb_lg(args)
     print(f'global bs={args.bs}, local bs={args.lbs}')
     print(f'initial args:\n{str(args)}')
+    args.img_channels = int(args.img_channels)
+    if args.img_channels not in (1, 3):
+        raise ValueError(f'img_channels must be 1 or 3, got {args.img_channels}')
     
     if start_ep == args.ep:
         print(f'[vlip] Training finished ({acc_str}), skipping ...\n\n')
@@ -173,7 +176,7 @@ def build_things_from_args(args: arg_util.Args):
     # xl: -1~1,t
     if not args.local_debug:
         print(f'[build PT data] ...\n')
-        dataset_train, dataset_val = build_dataset(datasets_str=args.data)
+        dataset_train, dataset_val = build_dataset(datasets_str=args.data, img_channels=args.img_channels)
         ld_train = DataLoader(
             dataset=dataset_train, num_workers=args.workers, pin_memory=True,
             generator=args.get_different_generator_for_each_rank(), # worker_init_fn=worker_init_fn,

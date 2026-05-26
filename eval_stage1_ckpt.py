@@ -21,11 +21,10 @@ from typing import Dict, Iterable, List, Sequence
 import numpy as np
 import torch
 from PIL import Image
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from torchvision import transforms
 
 from models.lr_vae import LR_VAE
-from utils.image_saver import denormalize_image, save_reconstruction_comparison, tensor_to_pil_image
+from utils.image_saver import compute_psnr_ssim, denormalize_image, save_reconstruction_comparison, tensor_to_pil_image
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -43,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr_vocab_width", type=int, default=None, help="Optional override. Defaults to ckpt args.lr_vocab_width or 32.")
     parser.add_argument("--drop_out", type=float, default=None, help="Optional override. Defaults to ckpt args.drop_out or 0.0.")
     parser.add_argument("--lr_vq_beta", type=float, default=None, help="Optional override. Defaults to ckpt args.lr_vq_beta or 1.0.")
+    parser.add_argument("--img_channels", type=int, default=None, help="Optional override. Defaults to ckpt args.img_channels or 3. Use 1 for grayscale.")
     return parser.parse_args()
 
 
@@ -111,6 +111,7 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
     lr_vocab_width = args.lr_vocab_width if args.lr_vocab_width is not None else int(read_ckpt_arg(ckpt, "lr_vocab_width", 32))
     drop_out = args.drop_out if args.drop_out is not None else float(read_ckpt_arg(ckpt, "drop_out", 0.0))
     lr_vq_beta = args.lr_vq_beta if args.lr_vq_beta is not None else float(read_ckpt_arg(ckpt, "lr_vq_beta", 1.0))
+    img_channels = args.img_channels if args.img_channels is not None else int(read_ckpt_arg(ckpt, "img_channels", 3))
 
     model = LR_VAE(
         z_channels=lr_vocab_width,
@@ -118,6 +119,7 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
         dropout=drop_out,
         beta=lr_vq_beta,
         test_mode=True,
+        img_channels=img_channels,
     ).to(device)
     state = extract_lr_state_dict(ckpt)
     missing, unexpected = model.load_state_dict(state, strict=False)
@@ -130,12 +132,6 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
 def batch_iter(items: Sequence[Path], batch_size: int) -> Iterable[Sequence[Path]]:
     for i in range(0, len(items), batch_size):
         yield items[i:i + batch_size]
-
-
-def to_img_np_01(t: torch.Tensor) -> np.ndarray:
-    # t: [C, H, W] in [-1, 1]
-    arr = ((t.detach().cpu().numpy() + 1.0) / 2.0).clip(0.0, 1.0)
-    return np.transpose(arr, (1, 2, 0))
 
 
 def evaluate(
@@ -163,8 +159,9 @@ def evaluate(
         for chunk in batch_iter(samples, batch_size):
             inp_tensors = []
             keys: List[str] = []
+            image_mode = "L" if getattr(model, "img_channels", 3) == 1 else "RGB"
             for img_path in chunk:
-                img = Image.open(img_path).convert("RGB")
+                img = Image.open(img_path).convert(image_mode)
                 inp_tensors.append(to_pm1_tensor(img))
                 keys.append(img_path.stem)
                 sampled_lines.append(str(img_path))
@@ -185,11 +182,9 @@ def evaluate(
 
             pred_denorm = denormalize_image(pred_batch.clone())  # [0, 1]
             for idx, key in enumerate(keys):
-                gt_np = to_img_np_01(inp_batch[idx])
-                pred_np = np.transpose(pred_denorm[idx].numpy(), (1, 2, 0))
-
-                cur_psnr = float(peak_signal_noise_ratio(gt_np, pred_np, data_range=1.0))
-                cur_ssim = float(structural_similarity(gt_np, pred_np, channel_axis=2, data_range=1.0))
+                cur_metrics = compute_psnr_ssim(pred_batch[idx:idx + 1], inp_batch[idx:idx + 1])
+                cur_psnr = float(cur_metrics["psnr_list"][0])
+                cur_ssim = float(cur_metrics["ssim_list"][0])
                 rows.append({"key": key, "psnr": cur_psnr, "ssim": cur_ssim})
 
                 pred_img = tensor_to_pil_image(pred_denorm[idx])

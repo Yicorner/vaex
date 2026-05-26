@@ -21,11 +21,13 @@ class LR_VAE(nn.Module):
         beta=1.0,  # KL loss weight
         quant_conv_ks=3,
         test_mode=False,
+        img_channels: int = 3,
     ):
         super().__init__()
         self.test_mode = test_mode
         self.Cvae = z_channels
         self.kl_weight = beta
+        self.img_channels = int(img_channels)
         
         # Encoder and Decoder configuration
         # Same as HR VAE but we'll ensure output is 5x5
@@ -33,7 +35,7 @@ class LR_VAE(nn.Module):
             dropout=dropout, 
             ch=ch, 
             z_channels=z_channels,
-            in_channels=3, 
+            in_channels=self.img_channels,
             ch_mult=(1, 1, 2, 2, 4),  # 5 levels, downsample 2^4 = 16x
             num_res_blocks=2,
             using_sa=True, 
@@ -70,10 +72,10 @@ class LR_VAE(nn.Module):
         Forward pass for LR VAE training.
         
         Args:
-            inp: LR input images [B, 3, H, W] where H=W should be 80 (to get 5x5 after 16x downsample)
+            inp: LR input images [B, img_channels, H, W] where H=W should be 80 (to get 5x5 after 16x downsample)
         
         Returns:
-            rec_B3HW: reconstructed images [B, 3, H, W]
+            rec_B3HW: reconstructed images [B, img_channels, H, W]
             f_5x5: latent features at 5x5 resolution [B, C, 5, 5]
             kl_loss: KL divergence loss (scalar)
         """
@@ -126,7 +128,7 @@ class LR_VAE(nn.Module):
         Encode LR image to 5x5 latent (for inference/alignment).
         
         Args:
-            inp: LR input images [B, 3, H, W]
+            inp: LR input images [B, img_channels, H, W]
         
         Returns:
             f_5x5: latent features [B, C, 5, 5]
@@ -142,7 +144,7 @@ class LR_VAE(nn.Module):
             f_5x5: latent features [B, C, 5, 5]
         
         Returns:
-            rec: reconstructed images [B, 3, H, W]
+            rec: reconstructed images [B, img_channels, H, W]
         """
         return self.decoder(self.post_quant_conv(f_5x5)).clamp(-1, 1)
 

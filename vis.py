@@ -56,6 +56,12 @@ class Visualizer(object):
         # BCHW = BCHW * self.data_s
         # BCHW += self.data_m
         return BCHW.add(1).mul_(0.5).clamp_(0, 1)
+
+    @staticmethod
+    def _as_rgb_for_pretrained(img: torch.Tensor) -> torch.Tensor:
+        if img.shape[1] == 1:
+            return img.repeat(1, 3, 1, 1)
+        return img
     
     @for_visualize
     def vis(self, tb_lg: misc.TensorboardLogger, ep: int, png_path: str) -> Tuple[float, float]:
@@ -74,8 +80,9 @@ class Visualizer(object):
             
             L1_ema = F.l1_loss(rec_B3HW_ema, self.inp_B3HW).item()
             L1 = F.l1_loss(rec_B3HW, self.inp_B3HW).item()
-            Lpip_ema = self.trainer.lpips_loss(rec_B3HW_ema, self.inp_B3HW).item()
-            Lpip = self.trainer.lpips_loss(rec_B3HW, self.inp_B3HW).item()
+            inp_lpips = self._as_rgb_for_pretrained(self.inp_B3HW)
+            Lpip_ema = self.trainer.lpips_loss(self._as_rgb_for_pretrained(rec_B3HW_ema), inp_lpips).item()
+            Lpip = self.trainer.lpips_loss(self._as_rgb_for_pretrained(rec_B3HW), inp_lpips).item()
             diff_ema = (L1_ema + Lpip_ema) / 2
             diff = (L1 + Lpip) / 2
             ema_better = diff_ema < diff

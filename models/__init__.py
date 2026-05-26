@@ -29,6 +29,7 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         share_quant_resi=args.share_quant_resi,
         v_patch_nums=args.patch_nums,
         debug_kl_count_limit=args.debug_kl_count_limit,
+        img_channels=args.img_channels,
     ).to(args.device)
     disc = DinoDisc(
         device=args.device, depth=args.dino_depth, key_depths=(2, 5, 8, 11),
@@ -58,6 +59,7 @@ def build_two_stage_models(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
         dropout=args.drop_out,
         beta=args.lr_vq_beta,
         test_mode=False,
+        img_channels=args.img_channels,
     ).to(args.device)
 
     lr_need_init = [

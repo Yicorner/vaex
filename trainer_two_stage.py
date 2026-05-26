@@ -14,11 +14,9 @@ Stage 2:
 """
 import os
 import math
-import math
 from copy import deepcopy
 from typing import Callable, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,7 +27,7 @@ from models import DinoDisc, LR_VAE, VQVAE
 from utils import arg_util, misc
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
-from utils.image_saver import save_reconstruction_comparison, save_reconstruction_run_metadata
+from utils.image_saver import compute_psnr_ssim, save_reconstruction_comparison, save_reconstruction_run_metadata
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
 
@@ -251,8 +249,14 @@ class TwoStageVAETrainer(object):
         self.ema_gada = torch.nan_to_num(self.ema_gada, nan=0.0, posinf=1e4, neginf=0.0)
         return self.ema_gada * self.wei_disc
 
+    @staticmethod
+    def _as_rgb_for_pretrained(img: torch.Tensor) -> torch.Tensor:
+        if img.shape[1] == 1:
+            return img.repeat(1, 3, 1, 1)
+        return img
+
     def _disc_input_pm1(self, img: torch.Tensor) -> torch.Tensor:
-        return img.float().clamp(-1.0, 1.0)
+        return self._as_rgb_for_pretrained(img).float().clamp(-1.0, 1.0)
 
     def _ema_update(self, ema_model: nn.Module, model: nn.Module):
         with torch.no_grad():
@@ -454,7 +458,10 @@ class TwoStageVAETrainer(object):
 
                 using_lpips = inp_lr.shape[-2] >= self.lp_reso and self.wei_lpips > 0
                 if using_lpips:
-                    Lpip = torch.mean(self.lpips_loss(inp_lr, rec_B3HW))
+                    Lpip = torch.mean(self.lpips_loss(
+                        self._as_rgb_for_pretrained(inp_lr),
+                        self._as_rgb_for_pretrained(rec_B3HW),
+                    ))
                     Lnll = Lrec + self.wei_lpips * Lpip
                 else:
                     Lpip = inp_lr.new_zeros(())
@@ -590,7 +597,10 @@ class TwoStageVAETrainer(object):
 
                 using_lpips = inp_hr.shape[-2] >= self.lp_reso and self.wei_lpips > 0
                 if using_lpips:
-                    Lpip = torch.mean(self.lpips_loss(inp_hr, rec_B3HW))
+                    Lpip = torch.mean(self.lpips_loss(
+                        self._as_rgb_for_pretrained(inp_hr),
+                        self._as_rgb_for_pretrained(rec_B3HW),
+                    ))
                     Lnll = Lrec + self.wei_lpips * Lpip
                 else:
                     Lpip = inp_hr.new_zeros(())
@@ -753,8 +763,6 @@ class TwoStageVAETrainer(object):
 
     @torch.no_grad()
     def eval_ep(self, ld_val, max_batches=None):
-        from skimage.metrics import peak_signal_noise_ratio, structural_similarity
-
         tot = 0
         rec_loss = 0.0
         psnr_sum = 0.0
@@ -800,14 +808,9 @@ class TwoStageVAETrainer(object):
                     rec, _, _ = eval_model(inp_hr, use_kl=self.stage2_use_kl)
 
             rec_loss += F.l1_loss(rec, inp, reduction='sum').item()
-            inp_np = inp.cpu().numpy()
-            rec_np = rec.cpu().numpy()
-
-            for b in range(inp.shape[0]):
-                img_gt = np.transpose((inp_np[b] + 1) / 2, (1, 2, 0))
-                img_rec = np.transpose(np.clip((rec_np[b] + 1) / 2, 0, 1), (1, 2, 0))
-                psnr_sum += peak_signal_noise_ratio(img_gt, img_rec, data_range=1.0)
-                ssim_sum += structural_similarity(img_gt, img_rec, channel_axis=2, data_range=1.0)
+            metrics = compute_psnr_ssim(rec, inp)
+            psnr_sum += metrics['psnr_mean'] * inp.shape[0]
+            ssim_sum += metrics['ssim_mean'] * inp.shape[0]
 
             tot += inp.shape[0]
 

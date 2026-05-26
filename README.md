@@ -278,4 +278,52 @@ python eval_stage2_ckpt.py \
   --seed 42 \
   --batch_size 4
 
+## 单通道医学影像模式
+
+默认仍然兼容旧实验：`IMG_CHANNELS=3`。如果训练灰度医学影像，建议新实验显式加 `IMG_CHANNELS=1`。这会让数据集以 PIL `L` 模式读取图片，VAE / LR_VAE 的输入输出通道都变成 1；LPIPS 和 DINO 判别器内部会临时把灰度图 repeat 成 3 通道以兼容预训练网络；PSNR / SSIM 在 `C=1` 时按真正的灰度 `H x W` 图计算，不再走 RGB `channel_axis=2`。
+
+注意：`IMG_CHANNELS=1` 会改变 encoder 第一层和 decoder 最后一层形状，所以需要重新训练对应的 myvaex checkpoint；不能直接拿 RGB checkpoint 混用。
+
+推荐 stage2 no-KL 灰度命令：
+
+```bash
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
+STAGE=2 \
+EXP_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+EXP_NOTE="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels" \
+RECONSTRUCTION_DIR_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+IMG_CHANNELS=1 \
+LR_FOLDER=LR \
+HR_FOLDER=HR \
+LR_IMG_SIZE=256 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
+STAGE2_DISC_WEIGHT=0.2 \
+STAGE2_DISC_START_EP=0.5 \
+STAGE2_DISC_WARMUP_EP=0.5 \
+VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=100 \
+STAGE2_EP=3 \
+bash train.sh
+```
+
+灰度 checkpoint 单独评估时也可以显式传：
+
+```bash
+python eval_stage2_ckpt.py \
+  --ckpt_path local_output/test/your_gray_stage2/ckpt-best.pth \
+  --test_dir /home/featurize/data/brats_256_t2_2021_pair_png_with_ref/test/HR \
+  --output_dir local_output/test/your_gray_stage2_eval \
+  --img_channels 1 \
+  --num_samples 100 \
+  --batch_size 4
+```
+
 

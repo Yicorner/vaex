@@ -60,6 +60,7 @@ HR_FOLDER=${HR_FOLDER:-${hr_folder:-HR}}
 PATCH_NUMS_STR=${PATCH_NUMS:-${patch_nums:-"5 6 8 10 13 16"}}
 read -r -a PATCH_NUMS <<< "$PATCH_NUMS_STR"
 LR_IMG_SIZE=${LR_IMG_SIZE:-${lr_img_size:-80}}
+IMG_CHANNELS=${IMG_CHANNELS:-${img_channels:-3}}
 LR_CH=128
 LR_VOCAB_WIDTH=32
 LR_VQ_BETA=${LR_VQ_BETA:-${lr_vq_beta:-1e-3}}           # 32x5x5=800 dim latent, KL is summed, 1.0 会直接把 posterior 压塌，建议 1e-4 ~ 1e-3
@@ -190,6 +191,7 @@ if [ "$STAGE" = "1" ]; then
   --ep="${STAGE1_EP:-${EP_COMMON:-100}}" \
   --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
+  --img_channels="$IMG_CHANNELS" \
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
   --lr_vq_beta="$LR_VQ_BETA" \
@@ -240,6 +242,7 @@ elif [ "$STAGE" = "2" ]; then
   --ep="${STAGE2_EP:-${EP_COMMON:-150}}" \
   --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
   --lr_img_size="$LR_IMG_SIZE" \
+  --img_channels="$IMG_CHANNELS" \
   --lr_ch="$LR_CH" \
   --lr_vocab_width="$LR_VOCAB_WIDTH" \
   --lr_vq_beta="$LR_VQ_BETA" \

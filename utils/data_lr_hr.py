@@ -25,6 +25,7 @@ class LR_HR_Dataset(Dataset):
         load_mode: str = 'both',  # 'lr_only', 'hr_only', or 'both'
         lr_folder: str = 'LR',
         hr_folder: str = 'HR',
+        img_channels: int = 3,
     ):
         """
         Args:
@@ -39,6 +40,7 @@ class LR_HR_Dataset(Dataset):
         self.transform = transform
         self.augment = augment
         self.load_mode = load_mode
+        self.image_mode = self._pil_mode_from_channels(img_channels)
 
         # Build file lists
         self.lr_files = []
@@ -90,7 +92,7 @@ class LR_HR_Dataset(Dataset):
             - If load_mode == 'both': tuple (lr_img, hr_img)
         """
         if self.load_mode == 'lr_only':
-            img = Image.open(self.lr_files[idx]).convert('RGB')
+            img = Image.open(self.lr_files[idx]).convert(self.image_mode)
             if self.augment:
                 img = self._augment(img)
             if self.transform:
@@ -98,7 +100,7 @@ class LR_HR_Dataset(Dataset):
             return img
         
         elif self.load_mode == 'hr_only':
-            img = Image.open(self.hr_files[idx]).convert('RGB')
+            img = Image.open(self.hr_files[idx]).convert(self.image_mode)
             if self.augment:
                 img = self._augment(img)
             if self.transform:
@@ -107,8 +109,8 @@ class LR_HR_Dataset(Dataset):
         
         else:  # both
             lr_path, hr_path = self.data_files[idx]
-            lr_img = Image.open(lr_path).convert('RGB')
-            hr_img = Image.open(hr_path).convert('RGB')
+            lr_img = Image.open(lr_path).convert(self.image_mode)
+            hr_img = Image.open(hr_path).convert(self.image_mode)
             
             # Apply same augmentation to both if enabled
             if self.augment:
@@ -132,6 +134,14 @@ class LR_HR_Dataset(Dataset):
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
         return img
 
+    @staticmethod
+    def _pil_mode_from_channels(img_channels: int) -> str:
+        if int(img_channels) == 1:
+            return 'L'
+        if int(img_channels) == 3:
+            return 'RGB'
+        raise ValueError(f'img_channels must be 1 or 3, got {img_channels}')
+
 
 def normalize_01_into_pm1(x):
     """Normalize x from [0, 1] to [-1, 1]"""
@@ -143,6 +153,7 @@ def build_lr_hr_dataset(
     load_mode: str = 'both',
     lr_folder: str = 'LR',
     hr_folder: str = 'HR',
+    img_channels: int = 3,
 ):
     """
     Build LR-HR dataset for two-stage training.
@@ -165,6 +176,7 @@ def build_lr_hr_dataset(
         load_mode=load_mode,
         lr_folder=lr_folder,
         hr_folder=hr_folder,
+        img_channels=img_channels,
     )
 
     val_set = LR_HR_Dataset(
@@ -174,8 +186,9 @@ def build_lr_hr_dataset(
         load_mode=load_mode,
         lr_folder=lr_folder,
         hr_folder=hr_folder,
+        img_channels=img_channels,
     )
 
-    print(f'[LR-HR Dataset] mode={load_mode}, lr_folder={lr_folder}, hr_folder={hr_folder}, {len(train_set)=}, {len(val_set)=}')
+    print(f'[LR-HR Dataset] mode={load_mode}, image_mode={train_set.image_mode}, img_channels={img_channels}, lr_folder={lr_folder}, hr_folder={hr_folder}, {len(train_set)=}, {len(val_set)=}')
     return train_set, val_set
 

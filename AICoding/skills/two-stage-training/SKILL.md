@@ -211,3 +211,10 @@ STAGE2_DISC_WARMUP_EP=0.5
 - checkpoint 恢复后 `training_stage` 是否正确回填
 
 如果问题只涉及 GAN loss 调用差异，去看：`AICoding/skills/discriminator-loss-compatibility/`
+
+## 7. 单通道灰度注意事项
+
+- `IMG_CHANNELS=1` 时 stage2 的 HR 重建和 scale0 image alignment 都在 `[B,1,H,W]` 上计算，LR target 也由 paired dataset 以灰度读取。
+- LPIPS / DINO discriminator 分支内部会把灰度 repeat 到 RGB，避免预训练网络输入通道不匹配；这不改变 decoder 的真实输出通道。
+- PSNR / SSIM 使用 `utils.image_saver.compute_psnr_ssim()`：灰度图不再转换 Y 通道，而是直接按单通道 `[0,1]` 图比较。
+- 灰度和 RGB checkpoint 的首尾卷积形状不同；切换 `IMG_CHANNELS` 时应视为一个新模型配置。
