@@ -126,7 +126,7 @@ class SpectralConv1d(nn.Conv1d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # init.normal_(self.weight, mean=0.0, std=0.02)
-        SpectralNorm.apply(self, name='weight', n_power_iterations=1, dim=0, eps=1e-12)
+        SpectralNorm.apply(self, name='weight', n_power_iterations=1, dim=0, eps=1e-8)
 
 
 class BatchNormLocal(nn.Module):

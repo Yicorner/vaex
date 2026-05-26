@@ -122,6 +122,13 @@ ALIGNMENT_LOSS_WEIGHT=0.25
 STAGE2_DISC_WEIGHT=0.2
 STAGE2_DISC_START_EP=0.5
 STAGE2_DISC_WARMUP_EP=0.5
+
+# If NaN appears exactly when dlr becomes positive, suspect the DINO discriminator path.
+# Start a diagnostic retry with:
+#   DBG_NAN=True
+#   STAGE2_DISC_WEIGHT=-0.05   # fixed 0.05 GAN weight, adaptive Wg disabled
+#   DISC_AUG_PROB=0.5
+#   STAGE2_DISC_START_EP=1.0
 ```
 
 这组配比的意图：降低 MSE 平滑倾向，用 L1 保结构，用适度 LPIPS/GAN 提高清晰度，同时避免 GAN 和 scale0 alignment 过强导致伪细节或低频约束压过 HR 重建。

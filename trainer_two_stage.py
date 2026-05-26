@@ -241,13 +241,18 @@ class TwoStageVAETrainer(object):
         g_grads = torch.autograd.grad(g_loss, last_layer_weight, retain_graph=True)[0]
 
         d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-7)
+        d_weight = torch.nan_to_num(d_weight, nan=0.0, posinf=1e4, neginf=0.0)
         d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
 
-        if self.ema_gada is None:
+        if self.ema_gada is None or not torch.isfinite(self.ema_gada).all().item():
             self.ema_gada = d_weight
         else:
             self.ema_gada = self.ema_gada * 0.9 + d_weight * 0.1
+        self.ema_gada = torch.nan_to_num(self.ema_gada, nan=0.0, posinf=1e4, neginf=0.0)
         return self.ema_gada * self.wei_disc
+
+    def _disc_input_pm1(self, img: torch.Tensor) -> torch.Tensor:
+        return img.float().clamp(-1.0, 1.0)
 
     def _ema_update(self, ema_model: nn.Module, model: nn.Module):
         with torch.no_grad():
@@ -255,8 +260,8 @@ class TwoStageVAETrainer(object):
                 ema_param.data.mul_(self.ema_ratio).add_(param.data, alpha=1 - self.ema_ratio)
 
     def _disc_forward(self, real_img: torch.Tensor, fake_img: torch.Tensor, fade_blur_schedule: float):
-        real_aug = self.daug.aug(real_img, fade_blur_schedule)
-        fake_aug = self.daug.aug(fake_img, fade_blur_schedule)
+        real_aug = self.daug.aug(self._disc_input_pm1(real_img), fade_blur_schedule)
+        fake_aug = self.daug.aug(self._disc_input_pm1(fake_img), fade_blur_schedule)
         return self.disc(torch.cat((real_aug, fake_aug), dim=0)).split([real_img.shape[0], fake_img.shape[0]], dim=0)
 
     def _generator_adv_loss(self, fake_img: torch.Tensor, fade_blur_schedule: float) -> torch.Tensor:
@@ -267,7 +272,7 @@ class TwoStageVAETrainer(object):
                 param.requires_grad_(False)
             self.disc_wo_ddp.eval()
             fake_logits = self.disc_wo_ddp(
-                self.daug.aug(fake_img, fade_blur_schedule),
+                self.daug.aug(self._disc_input_pm1(fake_img), fade_blur_schedule),
                 grad_ckpt=self.disc_grad_ckpt,
             )
         finally:

@@ -100,6 +100,8 @@ STAGE2_DISC_WARMUP_EP=0.5 \
 bash train.sh
 ```
 
+If NaN begins when `dlr` turns positive, retry with `DBG_NAN=True`, `STAGE2_DISC_WEIGHT=-0.05`, `DISC_AUG_PROB=0.5`, and `STAGE2_DISC_START_EP=1.0`.
+
 `STAGE2_USE_KL=False` 的日志预期：`[stage2 mode] deterministic AE...`，Stage2 Debug 里的 `Lkl=0.000000`，进度条 `Lkl` 约为 `0.00e+00`。这是正常信号，不是 KL 统计坏掉。
 
 如果重建仍偏糊，优先检查 `STAGE2_DISC_START_EP` 是否小于总 epoch；例如 `STAGE2_EP=3` 且 `STAGE2_DISC_START_EP=30` 时，GAN 分支永远不会启动。

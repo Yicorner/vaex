@@ -217,6 +217,11 @@ ps -ef | grep torchrun
 # 也可用 STAGE1_LPIPS_WEIGHT / STAGE2_LPIPS_WEIGHT 分别覆盖；stage2 去糊建议 0.25（实际约 0.5）。
 
 # disc loss
+# NaN debug / stability knobs:
+# DBG_NAN=True makes training stop at the first non-finite tensor and prints its name.
+# DISC_AUG_PROB can be lowered to 0.5 or 0.0 if the DINO discriminator starts unstable.
+# DISC_SPEC_NORM=False disables discriminator spectral norm for a fresh run.
+# STAGE2_DISC_WEIGHT=-0.05 keeps a fixed 0.05 GAN weight and disables adaptive Wg.
 # 可用 LD（或 DISC_WEIGHT）覆盖两阶段默认 --ld。
 # 也可用 STAGE1_DISC_WEIGHT / STAGE2_DISC_WEIGHT 分别覆盖；stage2 去糊建议 0.2。
 # 可用 DISC_START_EP / DISC_WARMUP_EP 做通用覆盖，或用 STAGE2_DISC_START_EP / STAGE2_DISC_WARMUP_EP 只覆盖 stage2。
