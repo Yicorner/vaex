@@ -8,6 +8,7 @@ from utils.arg_util import Args
 from .quant import ContinuousMultiScaleQuantizer
 from .vqvae import VQVAE
 from .lr_vae import LR_VAE
+from .stage3_scale0 import Stage3Scale0Encoder
 from .dino import DinoDisc
 from .basic_vae import Encoder
 

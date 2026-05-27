@@ -214,6 +214,55 @@ STAGE2_DISC_WARMUP_EP=0.5
 
 如果问题只涉及 GAN loss 调用差异，去看：`AICoding/skills/discriminator-loss-compatibility/`
 
+## Stage3 LR -> Stage2 Scale0 Latent
+
+Stage3 is a separate `training_stage=3` path implemented by `train_stage3.py`.
+It trains only the LR encoder and quant conv; decoder, discriminator, and KL are
+not used.
+
+Flow:
+
+```text
+LR -> Stage3Scale0Encoder.encoder -> quant_conv -> adaptive_pool(n,n)
+   -> frozen copied stage2 mean_logvar_conv mean -> s0_pred
+
+HR -> frozen stage2 teacher encoder -> quant_conv
+   -> quantize.get_scale_posterior_stats(scale_index=0).mean -> s0_target
+```
+
+Required asserts:
+
+- `teacher.quantize.v_patch_nums[0] == args.stage3_latent_size`.
+- `s0_pred.shape == s0_target.shape == [B, Cvae, n, n]`.
+- `n == STAGE3_LATENT_SIZE`, default `4`.
+
+Default loss:
+
+```text
+1.00 * MSE(s0_pred, s0_target)
+0.10 * SmoothL1(s0_pred, s0_target)
+0.25 * L1(decode_stage2_s0(s0_pred), resize(LR))
+0.10 * L1(decode_stage2_s0(s0_pred), decode_stage2_s0(s0_target))
+```
+
+Run:
+
+```bash
+STAGE=3 STAGE2_CKPT=/path/to/stage2/ckpt-best.pth STAGE3_LATENT_SIZE=4 bash train.sh
+```
+
+Eval:
+
+```bash
+python eval_stage3_ckpt.py \
+  --ckpt_path /path/to/stage3/ckpt-best.pth \
+  --stage2_ckpt /path/to/stage2/ckpt-best.pth \
+  --test_dir /path/to/dataset/test \
+  --lr_folder LR_64x64 \
+  --hr_folder HR \
+  --output_dir /path/to/stage3_eval
+```
+
 ## 7. 单通道灰度注意事项
 
 - `IMG_CHANNELS=1` 时 stage2 的 HR 重建和 scale0 image alignment 都在 `[B,1,H,W]` 上计算，LR target 也由 paired dataset 以灰度读取。

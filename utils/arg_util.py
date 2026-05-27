@@ -80,6 +80,14 @@ class Args(Tap):
     stage2_use_kl: bool = True       # stage-2 VAE mode; False uses posterior mean and zero KL loss (deterministic AE)
     lr_vae_resume: str = ''         # optional stage-2 warm start for legacy latent alignment
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
+
+    # Stage 3: train LR -> stage2 scale[0] latent encoder
+    stage2_ckpt: str = ''            # stage-2 checkpoint used as frozen teacher for stage 3
+    stage3_latent_size: int = 4      # n for the n*n scale0 latent target
+    stage3_latent_mse_weight: float = 1.0
+    stage3_smooth_l1_weight: float = 0.1
+    stage3_pixel_lr_weight: float = 0.25
+    stage3_pixel_target_weight: float = 0.1
     
     # DINO discriminator
     dino_depth: int = 12        # 12: use all layers

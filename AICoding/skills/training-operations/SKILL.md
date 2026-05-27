@@ -74,6 +74,33 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 | `STAGE2_DISC_WEIGHT` | no-KL 时 `0.2` | stage2 `--ld`；过大可能产生伪细节 |
 | `STAGE2_DISC_START_EP` | no-KL 时 `0.5` | stage2 判别器启动 epoch；短跑不能继续用 30 |
 | `STAGE2_DISC_WARMUP_EP` | no-KL 时 `0.5` | stage2 判别器 warmup epoch |
+| `STAGE2_CKPT` | `${STAGE2_BED}/ckpt-best.pth` | stage3 的冻结 teacher VAE checkpoint |
+| `STAGE3_LATENT_SIZE` | `4` | stage3 输出的 `n*n` scale0 latent 边长，必须等于 stage2 `patch_nums[0]` |
+| `STAGE3_*_WEIGHT` | 见 `train.sh` | stage3 latent MSE / SmoothL1 / pixel LR / pixel target loss 权重 |
+| `STAGE3_EP` / `STAGE3_BED` | 空 / `myvaex_stage3_lr_to_scale0` | stage3 epoch 和输出目录 |
+
+stage3 入口：
+
+```bash
+STAGE=3 \
+STAGE2_CKPT=/path/to/stage2/ckpt-best.pth \
+STAGE3_LATENT_SIZE=4 \
+LR_FOLDER=LR_64x64 \
+HR_FOLDER=HR \
+bash train.sh
+```
+
+stage3 eval 入口：
+
+```bash
+python eval_stage3_ckpt.py \
+  --ckpt_path /path/to/stage3/ckpt-best.pth \
+  --stage2_ckpt /path/to/stage2/ckpt-best.pth \
+  --test_dir /path/to/dataset/test \
+  --lr_folder LR_64x64 \
+  --hr_folder HR \
+  --output_dir /path/to/stage3_eval
+```
 
 stage2 关闭 alignment 的对照入口：
 

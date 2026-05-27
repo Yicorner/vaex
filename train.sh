@@ -10,6 +10,7 @@ set -e
 #   EP=80 bash train.sh                     # 两阶段训练 epoch 数（也可用 ep）；stage 默认 100 / 150
 #   STAGE1_EP=120 bash train.sh             # 仅 stage 1；stage2 用 STAGE2_EP（或 stage1_ep / stage2_ep）
 #   STAGE=2 STAGE2_USE_KL=False bash train.sh  # stage2 训练成 deterministic AE，不采样、不加 KL
+#   STAGE=3 STAGE2_CKPT=/path/to/stage2/ckpt-best.pth bash train.sh  # LR -> stage2 scale0 latent
 
 #   RESUME="path/to/ckpt.pth" bash train.sh  # resume full trainer checkpoint
 
@@ -70,6 +71,8 @@ LR_KL_WARMUP_EP=${LR_KL_WARMUP_EP:-${lr_kl_warmup_ep:-1.0}}  # 对 KL 权重做 
 HR_VOCAB_WIDTH=32
 VAE_LR=1e-4
 DISC_LR=1e-4
+GRAD_CLIP=${GRAD_CLIP:-${grad_clip:-10}}
+TRAIN_LOG_POINTS_PER_EPOCH=${TRAIN_LOG_POINTS_PER_EPOCH:-${train_log_points_per_epoch:-0}}
 DISC_NORM=${DISC_NORM:-${disc_norm:-sbn}}
 DISC_SPEC_NORM=${DISC_SPEC_NORM:-${disc_spec_norm:-True}}
 DISC_AUG_PROB=${DISC_AUG_PROB:-${disc_aug_prob:-1.0}}
@@ -79,6 +82,7 @@ HR_VQ_BETA=${HR_VQ_BETA:-${VQ_BETA:-${vq_beta:-0.25}}}
 # Epochs: STAGE1_EP / STAGE2_EP（或 stage1_ep / stage2_ep）优先；否则用 EP / ep；再否则 stage 默认 100 / 150
 STAGE1_EP=${STAGE1_EP:-${stage1_ep:-}}
 STAGE2_EP=${STAGE2_EP:-${stage2_ep:-}}
+STAGE3_EP=${STAGE3_EP:-${stage3_ep:-}}
 EP_COMMON=${EP:-${ep:-}}
 VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
@@ -149,9 +153,18 @@ STAGE2_DISC_WEIGHT=${STAGE2_DISC_WEIGHT:-${stage2_disc_weight:-${DISC_WEIGHT:-${
 STAGE2_DISC_START_EP=${STAGE2_DISC_START_EP:-${stage2_disc_start_ep:-${DISC_START_EP:-${disc_start_ep:-$STAGE2_DISC_START_DEFAULT}}}}
 STAGE2_DISC_WARMUP_EP=${STAGE2_DISC_WARMUP_EP:-${stage2_disc_warmup_ep:-${DISC_WARMUP_EP:-${disc_warmup_ep:-$STAGE2_DISC_WARMUP_DEFAULT}}}}
 
+# Stage3 LR -> stage2 scale0 latent alignment.
+STAGE3_LATENT_SIZE=${STAGE3_LATENT_SIZE:-${stage3_latent_size:-4}}
+STAGE3_LATENT_MSE_WEIGHT=${STAGE3_LATENT_MSE_WEIGHT:-${stage3_latent_mse_weight:-1.0}}
+STAGE3_SMOOTH_L1_WEIGHT=${STAGE3_SMOOTH_L1_WEIGHT:-${stage3_smooth_l1_weight:-0.1}}
+STAGE3_PIXEL_LR_WEIGHT=${STAGE3_PIXEL_LR_WEIGHT:-${stage3_pixel_lr_weight:-0.25}}
+STAGE3_PIXEL_TARGET_WEIGHT=${STAGE3_PIXEL_TARGET_WEIGHT:-${stage3_pixel_target_weight:-0.1}}
+
 # 输出目录
 STAGE1_BED=${STAGE1_BED:-myvaex_stage1_lr_vae}
 STAGE2_BED=${STAGE2_BED:-myvaex_stage2_hr_scale0_img_aligned}
+STAGE3_BED=${STAGE3_BED:-${stage3_bed:-myvaex_stage3_lr_to_scale0}}
+STAGE2_CKPT=${STAGE2_CKPT:-${stage2_ckpt:-${STAGE2_BED}/ckpt-best.pth}}
 STAGE1_CKPT=${STAGE1_CKPT:-${stage1_ckpt:-}}
 if [ "$ALIGNMENT_LOSS_TYPE_KEY" = "latent" ] && [ -z "$STAGE1_CKPT" ]; then
   STAGE1_CKPT="${STAGE1_BED}/ckpt-best.pth"
@@ -183,6 +196,8 @@ else
     STAGE2_DEFAULT_EXP_NOTE="Stage 2: train HR multi-scale VAE with decoded scale0 image aligned to resized LR pixels"
   fi
 fi
+STAGE3_DEFAULT_EXP_NAME="stage3_lr_to_stage2_scale0"
+STAGE3_DEFAULT_EXP_NOTE="Stage 3: train LR encoder to predict frozen stage2 scale0 latent"
 
 if [ "$STAGE" = "1" ]; then
   EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE1_DEFAULT_EXP_NAME}}
@@ -280,7 +295,38 @@ elif [ "$STAGE" = "2" ]; then
   --dbg_nan="$DBG_NAN" \
   --debug_loss_printed_limit=10 \
   --debug_kl_count_limit=10
+elif [ "$STAGE" = "3" ]; then
+  EXP_NAME=${EXP_NAME:-${exp_name:-$STAGE3_DEFAULT_EXP_NAME}}
+  EXP_NOTE=${EXP_NOTE:-${exp_note:-$STAGE3_DEFAULT_EXP_NOTE}}
+  torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_stage3.py \
+  --exp_name="$EXP_NAME" --bed="$STAGE3_BED" \
+  --local_out_dir_path="$STAGE3_BED" \
+  --exp_note="$EXP_NOTE" \
+  "${RESUME_ARGS[@]}" \
+  --data="$DATA_PATH" \
+  --lr_folder="$LR_FOLDER" \
+  --hr_folder="$HR_FOLDER" \
+  --training_stage=3 \
+  --stage2_ckpt="$STAGE2_CKPT" \
+  --stage3_latent_size="$STAGE3_LATENT_SIZE" \
+  --stage3_latent_mse_weight="$STAGE3_LATENT_MSE_WEIGHT" \
+  --stage3_smooth_l1_weight="$STAGE3_SMOOTH_L1_WEIGHT" \
+  --stage3_pixel_lr_weight="$STAGE3_PIXEL_LR_WEIGHT" \
+  --stage3_pixel_target_weight="$STAGE3_PIXEL_TARGET_WEIGHT" \
+  --lbs="${STAGE3_LBS:-${LBS:-4}}" \
+  --ep="${STAGE3_EP:-${EP_COMMON:-50}}" \
+  --val_and_saving_per_ep="$VAL_AND_SAVING_PER_EP" \
+  --img_channels="$IMG_CHANNELS" \
+  --vae_lr="${STAGE3_LR:-$VAE_LR}" \
+  --vae_wd="${STAGE3_WD:-0.005}" \
+  --grad_clip="$GRAD_CLIP" \
+  --save_reconstruction_images=True \
+  --reconstruction_save_interval="$RECON_SAVE_INTERVAL" \
+  --reconstruction_max_samples="$RECON_MAX_SAMPLES" \
+  --reconstruction_dir_name="${RECON_DIR_NAME:-stage3_alignment}" \
+  --train_log_points_per_epoch="$TRAIN_LOG_POINTS_PER_EPOCH" \
+  --dbg_nan="$DBG_NAN"
 else
-  echo "Unknown STAGE=$STAGE, expected 1 or 2"
+  echo "Unknown STAGE=$STAGE, expected 1, 2, or 3"
   exit 1
 fi

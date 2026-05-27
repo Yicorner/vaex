@@ -397,4 +397,54 @@ python eval_stage2_ckpt.py \
   --batch_size 4
 ```
 
+## Stage3: LR to Stage2 Scale0 Latent
+
+Stage3 trains only an LR encoder path. The frozen teacher is a myvaex stage2
+checkpoint; the target is paired HR through that teacher VAE:
+`HR -> encoder -> quant_conv -> scale[0] posterior mean`. The stage3 prediction
+is `LR -> encoder -> quant_conv -> adaptive_pool(n,n) -> frozen mean_head`.
+Decoder, KL, and discriminator are not trained in stage3.
+
+Hard requirements:
+
+- `STAGE3_LATENT_SIZE` must equal `stage2_vae.quantize.v_patch_nums[0]`.
+- `s0_pred.shape == s0_target.shape == [B, Cvae, n, n]`.
+- Use paired folders under `DATA_PATH/{train,val,test}/{LR_FOLDER,HR_FOLDER}`.
+
+Training:
+
+```bash
+DATA_PATH=/path/to/paired_dataset \
+STAGE=3 \
+STAGE2_CKPT=local_output/stage2/ckpt-best.pth \
+STAGE3_BED=local_output/stage3_lr_to_scale0 \
+LR_FOLDER=LR_64x64 \
+HR_FOLDER=HR \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+STAGE3_LATENT_SIZE=4 \
+STAGE3_EP=20 \
+STAGE3_LATENT_MSE_WEIGHT=1.0 \
+STAGE3_SMOOTH_L1_WEIGHT=0.1 \
+STAGE3_PIXEL_LR_WEIGHT=0.25 \
+STAGE3_PIXEL_TARGET_WEIGHT=0.1 \
+bash train.sh
+```
+
+Evaluation on `test/`:
+
+```bash
+python eval_stage3_ckpt.py \
+  --ckpt_path local_output/stage3_lr_to_scale0/ckpt-best.pth \
+  --stage2_ckpt local_output/stage2/ckpt-best.pth \
+  --test_dir /path/to/paired_dataset/test \
+  --lr_folder LR_64x64 \
+  --hr_folder HR \
+  --output_dir local_output/stage3_lr_to_scale0_eval \
+  --num_samples 100 \
+  --batch_size 4
+```
+
+The eval script writes latent MSE/MAE/cosine/PSNR, decoded-image PSNR/SSIM,
+comparison PNGs, decoded predictions, and `summary.json`.
+
 

@@ -151,6 +151,58 @@ def save_reconstruction_comparison(
     return filepath
 
 
+def save_stage3_alignment_comparison(
+    lr: torch.Tensor,
+    pred_scale0_img: torch.Tensor,
+    target_scale0_img: torch.Tensor,
+    hr: torch.Tensor,
+    save_dir: str,
+    ep: int,
+    it: int,
+    max_samples: int = 4,
+) -> str:
+    """Save `LR_upsampled | pred_scale0_decode | target_scale0_decode | HR`.
+
+    This is for stage3, where the model predicts the stage2 scale[0] latent
+    from LR and the frozen stage2 decoder reveals what that latent means.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    lr_denorm = denormalize_image(lr.clone())
+    pred_denorm = denormalize_image(pred_scale0_img.clone())
+    target_denorm = denormalize_image(target_scale0_img.clone())
+    hr_denorm = denormalize_image(hr.clone())
+
+    target_hw = hr_denorm.shape[-2:]
+    if lr_denorm.shape[-2:] != target_hw:
+        lr_denorm = torch.nn.functional.interpolate(
+            lr_denorm, size=target_hw, mode='bicubic', align_corners=False
+        ).clamp_(0, 1)
+    if pred_denorm.shape[-2:] != target_hw:
+        pred_denorm = torch.nn.functional.interpolate(
+            pred_denorm, size=target_hw, mode='bicubic', align_corners=False
+        ).clamp_(0, 1)
+    if target_denorm.shape[-2:] != target_hw:
+        target_denorm = torch.nn.functional.interpolate(
+            target_denorm, size=target_hw, mode='bicubic', align_corners=False
+        ).clamp_(0, 1)
+
+    num_samples = min(hr.shape[0], max_samples)
+    tiles = []
+    for i in range(num_samples):
+        tiles.extend([lr_denorm[i], pred_denorm[i], target_denorm[i], hr_denorm[i]])
+
+    grid = torchvision.utils.make_grid(
+        torch.stack(tiles, dim=0),
+        nrow=4,
+        padding=2,
+        pad_value=1.0,
+    )
+    filepath = os.path.join(save_dir, f"ep{ep:04d}_it{it:06d}_stage3_alignment.png")
+    tensor_to_pil_image(grid).save(filepath)
+    return filepath
+
+
 def save_reconstruction_run_metadata(
     save_dir: str,
     args_state: Dict[str, Any],
