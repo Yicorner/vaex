@@ -60,6 +60,7 @@ description: Collect training parameters, optimizer responsibilities, logging ou
 |------|--------|------|
 | `PATCH_NUMS` | `"5 6 8 10 13 16"` | 多尺度配置字符串，脚本内会拆成数组传给 `--patch_nums` |
 | `LR_IMG_SIZE` | `80` | 传给 `--lr_img_size`，需与 `patch_nums[0]` 对齐（`lr_img_size/16`） |
+| `RESUME` | 空 | 传给 `--resume`，恢复完整 trainer checkpoint（VAE/LR_VAE/disc/optimizers/epoch/iter） |
 | `STAGE1_CKPT` | 空 | 仅 legacy `ALIGNMENT_LOSS_TYPE=latent` 需要；stage2 默认图像空间对齐不依赖 stage1 checkpoint |
 | `TRAIN_LOG_POINTS_PER_EPOCH` | `40` | 控制每个 epoch 内 `[Ep]: [...]` 进度日志打印点数量；值越大打印越频繁 |
 | `USE_LR_HR_ALIGNMENT` | `True` | stage2 是否启用 scale0 辅助对齐；设为 `False` 可做“paired loader + HR 重建”对照实验 |
@@ -100,7 +101,7 @@ STAGE2_DISC_WARMUP_EP=0.5 \
 bash train.sh
 ```
 
-If NaN begins when `dlr` turns positive, retry with `DBG_NAN=True`, `STAGE2_DISC_WEIGHT=-0.05`, `DISC_AUG_PROB=0.5`, and `STAGE2_DISC_START_EP=1.0`.
+If NaN begins when `dlr` turns positive, first suspect the DINO discriminator startup path. Current code initializes only `disc.heads` and refreshes spectral-norm `weight_u/weight_v`; for an already-corrupted run, start a fresh `EXP_NAME`. If it still happens, retry with `DBG_NAN=True`, `STAGE2_DISC_WEIGHT=-0.05`, `DISC_AUG_PROB=0.5`, and `STAGE2_DISC_START_EP=1.0`.
 
 `STAGE2_USE_KL=False` 的日志预期：`[stage2 mode] deterministic AE...`，Stage2 Debug 里的 `Lkl=0.000000`，进度条 `Lkl` 约为 `0.00e+00`。这是正常信号，不是 KL 统计坏掉。
 
@@ -186,8 +187,10 @@ If NaN begins when `dlr` turns positive, retry with `DBG_NAN=True`, `STAGE2_DISC
 ### 3.2 恢复训练
 
 ```bash
---resume="path/to/ckpt.pth"
+RESUME="path/to/ckpt.pth" bash train.sh
 ```
+
+`RESUME` 是完整断点恢复，会加载 trainer 中的 VAE / LR_VAE / discriminator / optimizer 状态；`STAGE1_CKPT` 只用于 legacy latent alignment 的 LR VAE warm start，不等价。
 
 ---
 

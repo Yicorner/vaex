@@ -151,6 +151,8 @@ STAGE2_DISC_WARMUP_EP=0.5
    - 不能只写 `Lg += wei_g * Lg_adv * 0`
    - 因为 `NaN * 0` 仍是 `NaN`，会把生成器 loss 污染为 `NaN`
    - 这条约束同时适用于 stage 1 和 stage 2
+   - 如果 NaN 第一次出现在 `dlr` 变成正数之后，优先排查 DINO discriminator path，而不是先怀疑重建 loss 或 scale0 alignment
+   - DINO 判别器初始化必须保留 frozen DINO checkpoint，只初始化 `disc.heads`；手动初始化 spectral-norm Conv1d 后要刷新 `weight_u/weight_v`
 7. 如果修改 encoder 下采样倍率，必须同步检查：
    - `patch_nums`
    - `lr_img_size`

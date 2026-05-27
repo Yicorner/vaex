@@ -11,6 +11,8 @@ set -e
 #   STAGE1_EP=120 bash train.sh             # 仅 stage 1；stage2 用 STAGE2_EP（或 stage1_ep / stage2_ep）
 #   STAGE=2 STAGE2_USE_KL=False bash train.sh  # stage2 训练成 deterministic AE，不采样、不加 KL
 
+#   RESUME="path/to/ckpt.pth" bash train.sh  # resume full trainer checkpoint
+
 TRAIN_ENV=${TRAIN_ENV:-FEATURIZE}
 
 case "$TRAIN_ENV" in
@@ -82,6 +84,11 @@ VAL_AND_SAVING_PER_EP=${VAL_AND_SAVING_PER_EP:-${val_and_saving_per_ep:-2}}
 RECON_SAVE_INTERVAL=${RECON_SAVE_INTERVAL:-0}
 RECON_MAX_SAMPLES=${RECON_MAX_SAMPLES:-4}
 RECON_DIR_NAME=${RECON_DIR_NAME:-${RECONSTRUCTION_DIR_NAME:-${reconstruction_dir_name:-}}}
+RESUME=${RESUME:-${resume:-}}
+RESUME_ARGS=()
+if [ -n "$RESUME" ]; then
+  RESUME_ARGS+=(--resume="$RESUME")
+fi
 USE_LR_HR_ALIGNMENT=${USE_LR_HR_ALIGNMENT:-${use_lr_hr_alignment:-True}}
 ALIGNMENT_LOSS_TYPE=${ALIGNMENT_LOSS_TYPE:-${alignment_loss_type:-scale0_image}}
 ALIGNMENT_LOSS_TYPE_KEY=$(printf '%s' "$ALIGNMENT_LOSS_TYPE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
@@ -183,6 +190,7 @@ if [ "$STAGE" = "1" ]; then
   torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_two_stage.py \
   --exp_name="$EXP_NAME" --bed="$STAGE1_BED" \
   --exp_note="$EXP_NOTE" \
+  "${RESUME_ARGS[@]}" \
   --data="$DATA_PATH" \
   --lr_folder="$LR_FOLDER" \
   --hr_folder="$HR_FOLDER" \
@@ -228,6 +236,7 @@ elif [ "$STAGE" = "2" ]; then
   torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port="$PORT" train_two_stage.py \
   --exp_name="$EXP_NAME" --bed="$STAGE2_BED" \
   --exp_note="$EXP_NOTE" \
+  "${RESUME_ARGS[@]}" \
   --data="$DATA_PATH" \
   --lr_folder="$LR_FOLDER" \
   --hr_folder="$HR_FOLDER" \

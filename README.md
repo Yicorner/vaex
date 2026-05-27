@@ -219,6 +219,8 @@ ps -ef | grep torchrun
 # disc loss
 # NaN debug / stability knobs:
 # DBG_NAN=True makes training stop at the first non-finite tensor and prints its name.
+# If NaN appears exactly when dlr turns positive, it is usually the DINO discriminator path, not scale0 alignment.
+# Fresh runs now initialize only DINO heads and reset spectral-norm buffers; old NaN runs should use a new EXP_NAME.
 # DISC_AUG_PROB can be lowered to 0.5 or 0.0 if the DINO discriminator starts unstable.
 # DISC_SPEC_NORM=False disables discriminator spectral norm for a fresh run.
 # STAGE2_DISC_WEIGHT=-0.05 keeps a fixed 0.05 GAN weight and disables adaptive Wg.
@@ -240,6 +242,10 @@ ps -ef | grep torchrun
 # 可用 LR_FOLDER（或小写 lr_folder）指定数据集中 LR 子目录名（默认 LR）。
 # 可用 HR_FOLDER（或小写 hr_folder）指定数据集中 HR 子目录名（默认 HR）。
 # 示例：LR_FOLDER=LR_64x64 bash train.sh
+
+# resume
+# Use RESUME="path/to/ckpt.pth" to pass --resume and restore the full trainer state.
+# This is different from STAGE1_CKPT, which only warm-starts the LR VAE for legacy latent alignment.
 
 # stage2 alignment
 # 默认 ALIGNMENT_LOSS_TYPE=scale0_image，不需要 STAGE1_CKPT。
@@ -309,6 +315,42 @@ STAGE2_DISC_WEIGHT=0.2 \
 STAGE2_DISC_START_EP=0.5 \
 STAGE2_DISC_WARMUP_EP=0.5 \
 VAL_AND_SAVING_PER_EP=1 \
+TRAIN_LOG_POINTS_PER_EPOCH=100 \
+STAGE2_EP=3 \
+bash train.sh
+```
+
+```bash
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
+STAGE=2 \
+EXP_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+EXP_NOTE="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels" \
+RECONSTRUCTION_DIR_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+IMG_CHANNELS=1 \
+LR_FOLDER=LR \
+HR_FOLDER=HR \
+LR_IMG_SIZE=256 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
+STAGE2_DISC_WEIGHT=0.2 \
+STAGE2_DISC_START_EP=0.5 \
+STAGE2_DISC_WARMUP_EP=0.5 \
+
+
+DBG_NAN=True \
+DISC_SPEC_NORM=False \
+DISC_NORM=gn \
+DISC_AUG_PROB=0.0 \
+
+VAL_AND_SAVING_PER_EP=1 \
+RESUME="path/to/ckpt.pth"
 TRAIN_LOG_POINTS_PER_EPOCH=100 \
 STAGE2_EP=3 \
 bash train.sh

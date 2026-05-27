@@ -1,6 +1,8 @@
 from typing import Tuple
 
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils.arg_util import Args
 from .quant import ContinuousMultiScaleQuantizer
@@ -74,6 +76,25 @@ def build_two_stage_models(args: Args) -> Tuple[VQVAE, DinoDisc, LR_VAE]:
     return vae, disc, lr_vae
 
 
+def _init_conv_weight(weight: torch.Tensor, conv_std_or_gain: float):
+    if conv_std_or_gain > 0:
+        nn.init.trunc_normal_(weight, std=conv_std_or_gain)
+    else:
+        nn.init.xavier_normal_(weight, gain=-conv_std_or_gain)
+
+
+def _reset_spectral_norm_state(module: nn.Module):
+    if not all(hasattr(module, name) for name in ('weight_orig', 'weight_u', 'weight_v')):
+        return
+
+    with torch.no_grad():
+        weight = module.weight_orig
+        if not torch.isfinite(weight).all():
+            raise RuntimeError(f'Non-finite spectral-norm weight in {type(module).__name__}')
+        module.weight_u.copy_(F.normalize(torch.randn_like(module.weight_u), dim=0, eps=1e-12))
+        module.weight_v.copy_(F.normalize(torch.randn_like(module.weight_v), dim=0, eps=1e-12))
+
+
 def init_weights(model, conv_std_or_gain):
     print(f'[init_weights] {type(model).__name__} with {"std" if conv_std_or_gain > 0 else "gain"}={abs(conv_std_or_gain):g}')
     for m in model.modules():
@@ -86,10 +107,9 @@ def init_weights(model, conv_std_or_gain):
             if m.padding_idx is not None:
                 m.weight.data[m.padding_idx].zero_()
         elif isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
-            if conv_std_or_gain > 0:
-                nn.init.trunc_normal_(m.weight.data, std=conv_std_or_gain)
-            else:
-                nn.init.xavier_normal_(m.weight.data, gain=-conv_std_or_gain)
+            weight = m.weight_orig if hasattr(m, 'weight_orig') else m.weight
+            _init_conv_weight(weight.data, conv_std_or_gain)
+            _reset_spectral_norm_state(m)
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias.data, 0.)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm, nn.GroupNorm, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d)):
