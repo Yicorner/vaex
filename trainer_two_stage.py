@@ -832,12 +832,12 @@ class TwoStageVAETrainer(object):
         return state
 
     def load_state_dict(self, state, strict=True):
-        self.vae_wo_ddp.load_state_dict(state['vae_wo_ddp'], strict=strict)
-        self.lr_vae_wo_ddp.load_state_dict(state['lr_vae_wo_ddp'], strict=strict)
-        self.disc_wo_ddp.load_state_dict(state['disc_wo_ddp'], strict=strict)
-        self.vae_opt.load_state_dict(state['vae_opt'])
-        self.lr_vae_opt.load_state_dict(state['lr_vae_opt'])
-        self.disc_opt.load_state_dict(state['disc_opt'])
+        misc.try_load_state_dict('vae_wo_ddp', self.vae_wo_ddp, state.get('vae_wo_ddp'), strict=strict)
+        misc.try_load_state_dict('lr_vae_wo_ddp', self.lr_vae_wo_ddp, state.get('lr_vae_wo_ddp'), strict=strict)
+        misc.try_load_state_dict('disc_wo_ddp', self.disc_wo_ddp, state.get('disc_wo_ddp'), strict=strict)
+        self.vae_opt.load_state_dict(state.get('vae_opt'))
+        self.lr_vae_opt.load_state_dict(state.get('lr_vae_opt'))
+        self.disc_opt.load_state_dict(state.get('disc_opt'))
         self.training_stage = state.get('training_stage', self.training_stage)
         self.use_alignment_loss = state.get('use_alignment_loss', self.use_alignment_loss)
         self.alignment_loss_type = self._normalize_alignment_loss_type(state.get('alignment_loss_type', self.alignment_loss_type))
@@ -846,10 +846,8 @@ class TwoStageVAETrainer(object):
         self.alignment_scale_index = state.get('alignment_scale_index', self.alignment_scale_index)
         self.stage2_use_kl = self._normalize_bool(state.get('stage2_use_kl', self.stage2_use_kl))
         if self.using_ema:
-            if 'vae_ema' in state:
-                self.vae_ema.load_state_dict(state['vae_ema'], strict=strict)
-            if 'lr_vae_ema' in state:
-                self.lr_vae_ema.load_state_dict(state['lr_vae_ema'], strict=strict)
+            misc.try_load_state_dict('vae_ema', self.vae_ema, state.get('vae_ema'), strict=strict)
+            misc.try_load_state_dict('lr_vae_ema', self.lr_vae_ema, state.get('lr_vae_ema'), strict=strict)
         if 'ema_gada' in state:
             self.ema_gada = state['ema_gada']
 

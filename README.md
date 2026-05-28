@@ -353,9 +353,9 @@ bash train.sh
 ```bash
 DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
 STAGE=2 \
-EXP_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
-EXP_NOTE="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels" \
-RECONSTRUCTION_DIR_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+EXP_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_resume \
+EXP_NOTE="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels with resume" \
+RECONSTRUCTION_DIR_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_resume \
 IMG_CHANNELS=1 \
 LR_FOLDER=LR \
 HR_FOLDER=HR \
@@ -369,7 +369,38 @@ STAGE2_USE_KL=False \
 STAGE2_L1_WEIGHT=1.0 \
 STAGE2_L2_WEIGHT=0.25 \
 STAGE2_LPIPS_WEIGHT=0.25 \
-
+DBG_NAN=True \
+DISC_SPEC_NORM=True \
+DISC_NORM=gn \
+DISC_AUG_PROB=1.0 \
+STAGE2_DISC_WEIGHT=-0.05 \
+STAGE2_DISC_START_EP=1.0 \
+STAGE2_DISC_WARMUP_EP=1.0 \
+VAL_AND_SAVING_PER_EP=1 \
+RESUME="/home/featurize/work/myvaex/local_output/test/test_stage2_gray_scale0_img_align_lr256_patch4to16_no_kl2/ckpt-0.pth" \
+TRAIN_LOG_POINTS_PER_EPOCH=100 \
+STAGE2_EP=3 \
+bash train.sh
+```
+```bash
+DATA_PATH=/home/featurize/data/brats_256_t2_2021_pair_png_with_ref \
+STAGE=2 \
+EXP_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_2 \
+EXP_NOTE="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels2" \
+RECONSTRUCTION_DIR_NAME=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_2 \
+IMG_CHANNELS=1 \
+LR_FOLDER=LR \
+HR_FOLDER=HR \
+LR_IMG_SIZE=256 \
+PATCH_NUMS="4 5 6 8 10 13 16" \
+USE_LR_HR_ALIGNMENT=True \
+ALIGNMENT_LOSS_TYPE=scale0_image \
+ALIGNMENT_LOSS_WEIGHT=0.25 \
+ALIGNMENT_LOSS_WARMUP_EP=0 \
+STAGE2_USE_KL=False \
+STAGE2_L1_WEIGHT=1.0 \
+STAGE2_L2_WEIGHT=0.25 \
+STAGE2_LPIPS_WEIGHT=0.25 \
 DBG_NAN=True \
 DISC_SPEC_NORM=False \
 DISC_NORM=gn \
@@ -377,14 +408,11 @@ DISC_AUG_PROB=0.0 \
 STAGE2_DISC_WEIGHT=-0.05 \
 STAGE2_DISC_START_EP=1.0 \
 STAGE2_DISC_WARMUP_EP=1.0 \
-
 VAL_AND_SAVING_PER_EP=1 \
-RESUME="path/to/ckpt.pth"
-TRAIN_LOG_POINTS_PER_EPOCH=100 \
+TRAIN_LOG_POINTS_PER_EPOCH=10 \
 STAGE2_EP=3 \
 bash train.sh
 ```
-
 灰度 checkpoint 单独评估时也可以显式传：
 
 ```bash

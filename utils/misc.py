@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Iterator, List, Tuple
+from typing import Any, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pytz
@@ -36,6 +36,31 @@ def os_system_get_stdout_stderr(cmd):
 
 def time_str(fmt='[%m-%d %H:%M:%S]'):
     return datetime.datetime.now(tz=pytz.timezone('Asia/Shanghai')).strftime(fmt)
+
+
+def try_load_state_dict(name: str, module, state: Optional[Any], *, strict: bool = False) -> bool:
+    """Load a module state_dict; skip and warn when the checkpoint is incompatible."""
+    if module is None:
+        return False
+    if state is None:
+        print(f'[resume] skip {name}: checkpoint has no state', flush=True)
+        return False
+
+    target = module._orig_mod if hasattr(module, '_orig_mod') else module
+    try:
+        ret = target.load_state_dict(state, strict=strict)
+    except (RuntimeError, ValueError) as e:
+        print(f'[resume] skip {name}: incompatible checkpoint ({e})', flush=True)
+        return False
+
+    if ret is not None:
+        missing, unexpected = ret
+        if missing:
+            print(f'[resume] {name} missing keys: {missing}', flush=True)
+        if unexpected:
+            print(f'[resume] {name} unexpected keys: {unexpected}', flush=True)
+    print(f'[resume] loaded {name}', flush=True)
+    return True
 
 
 class DistLogger(object):

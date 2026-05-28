@@ -110,7 +110,15 @@ class AmpOptimizer:
         }
     
     def load_state_dict(self, state, strict=True):
-        if self.scaler is not None:
-            try: self.scaler.load_state_dict(state['scaler'])
-            except Exception as e: print(f'[fp16 load_state_dict err] {e}')
-        self.optimizer.load_state_dict(state['optimizer'])
+        if state is None:
+            print(f'[resume] skip {self.model_name_3letters}_opt: checkpoint has no state', flush=True)
+            return False
+        try:
+            if self.scaler is not None and 'scaler' in state:
+                self.scaler.load_state_dict(state['scaler'])
+            self.optimizer.load_state_dict(state['optimizer'])
+        except (RuntimeError, ValueError) as e:
+            print(f'[resume] skip {self.model_name_3letters}_opt: incompatible checkpoint ({e})', flush=True)
+            return False
+        print(f'[resume] loaded {self.model_name_3letters}_opt', flush=True)
+        return True
