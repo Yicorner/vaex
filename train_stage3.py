@@ -252,6 +252,7 @@ class Stage3Trainer:
         if not self._metadata_written and self.args.record_reconstruction_metadata:
             save_reconstruction_run_metadata(
                 save_dir=save_dir,
+                metadata_dir=self.args.local_out_dir_path,
                 args_state=self.args.state_dict(key_ordered=False),
                 stage_name='stage3_lr_to_stage2_scale0',
                 frequency_description='save stage3 LR/scale0 alignment comparisons on log iterations',

@@ -210,18 +210,23 @@ def save_reconstruction_run_metadata(
     frequency_description: str,
     max_samples: int,
     filename_pattern: str = "ep{epoch:04d}_it{iter:06d}_comparison.png",
+    metadata_dir: Optional[str] = None,
 ) -> str:
     """
-    Save a lightweight manifest next to reconstruction images.
+    Save a lightweight manifest for the training run.
 
-    The manifest makes it easy to trace which training command and arguments
-    produced the current reconstruction folder without reopening checkpoints.
+    Reconstruction PNGs live under ``save_dir``; ``run_metadata.json`` is written
+    to ``metadata_dir`` when provided (typically ``args.local_out_dir_path``),
+    otherwise falls back to ``save_dir`` for backward compatibility.
     """
     os.makedirs(save_dir, exist_ok=True)
-    metadata_path = os.path.join(save_dir, "run_metadata.json")
+    out_dir = metadata_dir if metadata_dir is not None else save_dir
+    os.makedirs(out_dir, exist_ok=True)
+    metadata_path = os.path.join(out_dir, "run_metadata.json")
     payload = {
         "stage_name": stage_name,
         "save_dir": save_dir,
+        "metadata_dir": out_dir,
         "filename_pattern": filename_pattern,
         "frequency_description": frequency_description,
         "comparison_layout": "2 columns per row: original | reconstructed",

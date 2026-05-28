@@ -144,7 +144,7 @@ class TwoStageVAETrainer(object):
         self.stage2_use_kl = self._normalize_bool(stage2_use_kl)
 
         self.usage_max = 0.0
-        self._reconstruction_metadata_written_dirs = set()
+        self._run_metadata_written = False
         self._lr_posterior_log_printed = 0
 
         self.set_training_stage(training_stage)
@@ -163,7 +163,7 @@ class TwoStageVAETrainer(object):
     def _record_reconstruction_metadata(self, save_dir: str, args: arg_util.Args) -> None:
         if not getattr(args, 'record_reconstruction_metadata', True):
             return
-        if save_dir in self._reconstruction_metadata_written_dirs:
+        if self._run_metadata_written:
             return
 
         interval = max(int(getattr(args, 'reconstruction_save_interval', 0)), 0)
@@ -175,12 +175,13 @@ class TwoStageVAETrainer(object):
         stage_name = 'stage1_lr_vae' if self.training_stage == 1 else 'stage2_hr_vae'
         save_reconstruction_run_metadata(
             save_dir=save_dir,
+            metadata_dir=args.local_out_dir_path,
             args_state=args.state_dict(key_ordered=False),
             stage_name=stage_name,
             frequency_description=frequency_description,
             max_samples=getattr(args, 'reconstruction_max_samples', 4),
         )
-        self._reconstruction_metadata_written_dirs.add(save_dir)
+        self._run_metadata_written = True
 
     def _assert_finite(self, name: str, value, ep: int, it: int, stage: str) -> None:
         """Fail fast on NaN/Inf when dbg_nan is enabled."""

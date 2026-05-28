@@ -117,7 +117,7 @@ class Args(Tap):
     reconstruction_save_interval: int = 0    # 0: save on legacy log iterations; >0: save every N iterations
     reconstruction_max_samples: int = 4      # Number of samples per comparison image
     reconstruction_dir_name: str = ''        # Override reconstruction output subdirectory when needed
-    record_reconstruction_metadata: bool = True  # Save run metadata alongside reconstruction images
+    record_reconstruction_metadata: bool = True  # Save run_metadata.json under local_out_dir_path
     
     warmup_ep: float = 0    # lr warmup: epochs
     wp0: float = 0.005      # lr warmup: initial lr ratio
