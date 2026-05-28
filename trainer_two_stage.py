@@ -144,7 +144,6 @@ class TwoStageVAETrainer(object):
         self.stage2_use_kl = self._normalize_bool(stage2_use_kl)
 
         self.usage_max = 0.0
-        self._debug_loss_printed = 0
         self._reconstruction_metadata_written_dirs = set()
         self._lr_posterior_log_printed = 0
 
@@ -656,18 +655,6 @@ class TwoStageVAETrainer(object):
 
         if self.using_ema and stepping:
             self._ema_update(self.vae_ema, self.vae_wo_ddp)
-
-        if self._debug_loss_printed < args.debug_loss_printed_limit:
-            print(
-                f'[Stage2 Debug] [Ep {ep}] [It {it}] '
-                f'Lrec={Lrec_for_log.item():.4f}, '
-                f'Lkl={(Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl):.6f}, '
-                f'L_align={L_align.item():.6f}, '
-                f'align_type={self.alignment_loss_type}, align_w={effective_align_weight:.4f}, '
-                f'stage2_use_kl={self.stage2_use_kl}',
-                flush=True,
-            )
-            self._debug_loss_printed += 1
 
         if it == 0 or it in metric_lg.log_iters:
             metric_lg.update(

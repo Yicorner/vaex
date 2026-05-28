@@ -49,12 +49,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional override for multi-scale patch counts, e.g. --patch_nums 4 5 6 8 10 13 16.",
     )
-    parser.add_argument(
-        "--debug_kl_count_limit",
-        type=int,
-        default=None,
-        help="Optional override. Defaults to ckpt args.debug_kl_count_limit or 3.",
-    )
     parser.add_argument("--img_channels", type=int, default=None, help="Optional override. Defaults to ckpt args.img_channels or 3. Use 1 for grayscale.")
     return parser.parse_args()
 
@@ -140,11 +134,6 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
         patch_nums = tuple(int(x) for x in args.patch_nums)
     else:
         patch_nums = normalize_patch_nums(read_ckpt_arg(ckpt, "patch_nums", None))
-    debug_kl_count_limit = (
-        args.debug_kl_count_limit
-        if args.debug_kl_count_limit is not None
-        else int(read_ckpt_arg(ckpt, "debug_kl_count_limit", 3))
-    )
     img_channels = args.img_channels if args.img_channels is not None else int(read_ckpt_arg(ckpt, "img_channels", 3))
 
     model = VQVAE(
@@ -154,7 +143,6 @@ def build_model_from_ckpt(ckpt: dict, args: argparse.Namespace, device: torch.de
         test_mode=True,
         share_quant_resi=share_quant_resi,
         v_patch_nums=patch_nums,
-        debug_kl_count_limit=debug_kl_count_limit,
         img_channels=img_channels,
     ).to(device)
     state = extract_hr_state_dict(ckpt)

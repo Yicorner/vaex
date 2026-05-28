@@ -31,7 +31,6 @@ def build_vae_disc(args: Args) -> Tuple[VQVAE, DinoDisc]:
         test_mode=False,
         share_quant_resi=args.share_quant_resi,
         v_patch_nums=args.patch_nums,
-        debug_kl_count_limit=args.debug_kl_count_limit,
         img_channels=args.img_channels,
     ).to(args.device)
     disc = DinoDisc(

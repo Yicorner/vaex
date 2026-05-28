@@ -94,7 +94,6 @@ def build_stage2_teacher(args: arg_util.Args) -> VQVAE:
         test_mode=True,
         share_quant_resi=args.share_quant_resi,
         v_patch_nums=args.patch_nums,
-        debug_kl_count_limit=0,
         img_channels=args.img_channels,
     ).to(args.device)
     teacher.load_state_dict(_extract_stage2_vae_state(ckpt), strict=True)

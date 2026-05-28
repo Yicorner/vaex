@@ -24,7 +24,6 @@ class VQVAE(nn.Module):
         default_qresi_counts=0, # if is 0: automatically set to len(v_patch_nums)
         v_patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16), # number of patches for each scale
         test_mode=True,
-        debug_kl_count_limit: int = 3,  # limit for printing KL debug info
         img_channels: int = 3,
         # Legacy parameters kept for compatibility but not used:
         vocab_size=None,        # not used in continuous VAE
@@ -49,9 +48,8 @@ class VQVAE(nn.Module):
         self.downsample = 2 ** (len(ddconfig['ch_mult'])-1)
         self.quantize: ContinuousMultiScaleQuantizer = ContinuousMultiScaleQuantizer(
             Cvae=self.Cvae, beta=beta,
-            default_qresi_counts=default_qresi_counts, v_patch_nums=v_patch_nums, 
+            default_qresi_counts=default_qresi_counts, v_patch_nums=v_patch_nums,
             quant_resi=quant_resi, share_quant_resi=share_quant_resi,
-            debug_kl_count_limit=debug_kl_count_limit,
         )
         self.quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
         self.post_quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)

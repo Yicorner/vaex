@@ -167,8 +167,6 @@ class Args(Tap):
     local_debug: bool = 'KEVIN_LOCAL' in os.environ
     dbg_unused: bool = False
     dbg_nan: bool = False   # 'KEVIN_LOCAL' in os.environ
-    debug_loss_printed_limit: int = 3  # limit for printing loss debug info in trainer
-    debug_kl_count_limit: int = 3      # limit for printing KL debug info in quantizer
     train_log_points_per_epoch: int = 0  # <=0: use legacy auto log density; >0: print this many progress log points per epoch
     
     # would be automatically set in runtime

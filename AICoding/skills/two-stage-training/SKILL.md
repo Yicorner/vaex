@@ -109,7 +109,7 @@ STAGE=2 USE_LR_HR_ALIGNMENT=False bash train.sh
 STAGE=2 STAGE2_USE_KL=False ALIGNMENT_LOSS_TYPE=scale0_image bash train.sh
 ```
 
-预期现象：Stage2 Debug 和进度日志中的 `Lkl` 为 `0.00e+00`；保存重建图和验证 forward 都是 deterministic mean 路径。
+预期现象：进度日志中的 `Lkl` 为 `0.00e+00`；保存重建图和验证 forward 都是 deterministic mean 路径。
 
 如果只跑 `STAGE2_EP=2~3` 的短实验，不要沿用 `disc_start_ep=30`，否则 GAN 分支完全不启动，重建偏糊是预期的。短实验可以从下面这组较稳的去糊配比开始：
 

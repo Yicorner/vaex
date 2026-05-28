@@ -109,7 +109,6 @@ def build_teacher(stage2_ckpt_path: Path, device: torch.device) -> VQVAE:
         test_mode=True,
         share_quant_resi=int(read_ckpt_arg(ckpt, "share_quant_resi", 4)),
         v_patch_nums=patch_nums,
-        debug_kl_count_limit=0,
         img_channels=int(read_ckpt_arg(ckpt, "img_channels", 3)),
     ).to(device)
     model.load_state_dict(extract_vae_state(ckpt), strict=True)

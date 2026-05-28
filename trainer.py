@@ -160,14 +160,6 @@ class VAETrainer(object):
                 Le = 0.0
                 B = rec_B3HW.shape[0]
                 inp_rec_no_grad = torch.cat((inp, rec_B3HW.data), dim=0)
-                
-                # Debug: print KL loss info for first few iterations
-                if not hasattr(self, '_debug_kl_printed') or self._debug_kl_printed < 3:
-                    if not hasattr(self, '_debug_kl_printed'):
-                        self._debug_kl_printed = 0
-                    Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
-                    print(f'[Trainer Debug] [Ep {ep}] [It {it}] Lkl={Lkl_item:.6f} (raw value from quantizer)')
-                    self._debug_kl_printed += 1
             
             # Reconstruction loss (L1 + optional L2)
             Lrec = F.l1_loss(rec_B3HW, inp)
@@ -231,35 +223,10 @@ class VAETrainer(object):
                     wei_g = wei_g * w
                 
                 Lv = Lnll + Lkl + self.wei_entropy * Le + wei_g * Lg
-                
-                # Debug: print loss components for first few iterations
-                if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
-                    if not hasattr(self, '_debug_loss_printed'):
-                        self._debug_loss_printed = 0
-                    Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
-                    Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
-                    Lg_item = Lg.item() if isinstance(Lg, torch.Tensor) else Lg
-                    Lv_item = Lv.item() if isinstance(Lv, torch.Tensor) else Lv
-                    print(f'[Trainer Debug] [Ep {ep}] [It {it}] Loss components: '
-                          f'Lnll={Lnll_item:.6f}, Lkl={Lkl_item:.6f}, Lg={Lg_item:.6f}, '
-                          f'Lv={Lv_item:.6f}, ratio_kl/Lnll={Lkl_item/(Lnll_item+1e-8):.3f}')
-                    self._debug_loss_printed += 1
         else:
             Lv = Lnll + Lkl + self.wei_entropy * Le
             Lg = torch.tensor(0.)
             wei_g = None
-            
-            # Debug: print loss components for first few iterations (no discriminator)
-            if not hasattr(self, '_debug_loss_printed') or self._debug_loss_printed < args.debug_loss_printed_limit:
-                if not hasattr(self, '_debug_loss_printed'):
-                    self._debug_loss_printed = 0
-                Lnll_item = Lnll.item() if isinstance(Lnll, torch.Tensor) else Lnll
-                Lkl_item = Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl
-                Lv_item = Lv.item() if isinstance(Lv, torch.Tensor) else Lv
-                print(f'[Trainer Debug] [Ep {ep}] [It {it}] Loss components (no disc): '
-                      f'Lnll={Lnll_item:.6f}, Lkl={Lkl_item:.6f}, '
-                      f'Lv={Lv_item:.6f}, ratio_kl/Lnll={Lkl_item/(Lnll_item+1e-8):.3f}')
-                self._debug_loss_printed += 1
         
         # todo: G D backward together;   less calling .item()
         # todo: G D backward together;   less calling .item()
