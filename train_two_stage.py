@@ -6,7 +6,7 @@ import warnings
 from collections import deque
 from contextlib import nullcontext
 from functools import partial
-from typing import List, Optional, Tuple
+from typing import List
 
 import GPUtil
 import numpy as np
@@ -74,7 +74,8 @@ def build_two_stage_trainer(args: arg_util.Args):
     tb_lg = create_tb_lg(args)
     print(f'global bs={args.bs}, local bs={args.lbs}')
     print(f'initial args:\n{str(args)}')
-    [print(l) for l in auto_resume_info]
+    for line in auto_resume_info:
+        print(line)
     # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
     args.img_channels = int(args.img_channels)

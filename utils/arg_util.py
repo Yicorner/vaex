@@ -1,5 +1,3 @@
-import json
-import math
 import os
 import os.path as osp
 import random
@@ -16,7 +14,6 @@ import torch
 try:
     from tap import Tap
 except ImportError as e:
-    print(f'`>>>>>>>> from tap import Tap` failed, please run:      pip3 install typed-argument-parser     <<<<<<<<', file=sys.stderr, flush=True)
     print(f'`>>>>>>>> from tap import Tap` failed, please run:      pip3 install typed-argument-parser     <<<<<<<<', file=sys.stderr, flush=True)
     time.sleep(5)
     raise e
@@ -332,7 +329,6 @@ def init_dist_and_get_args():
         print(f'======================================================================================\n\n')
     
     # init torch distributed
-    from utils import misc
     os.makedirs(args.local_out_dir_path, exist_ok=True)
     dist.init_distributed_mode(local_out_path=args.local_out_dir_path, timeout_minutes=30)
     

@@ -4,9 +4,8 @@ import sys
 import time
 import warnings
 from collections import deque
-from contextlib import nullcontext
 from functools import partial
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import GPUtil
 import numpy as np
@@ -303,7 +302,8 @@ def build_everything(args: arg_util.Args):
     resume_info, start_ep, start_it, trainer_state = maybe_resume(args)
     tb_lg = create_tb_lg(args)
     print(f'initial args:\n{str(args)}')
-    [print(line) for line in resume_info]
+    for line in resume_info:
+        print(line)
 
     args.training_stage = 3
     args.stage3_latent_size = int(args.stage3_latent_size)

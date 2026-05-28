@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from models import ContinuousMultiScaleQuantizer, VQVAE, DinoDisc
+from models import VQVAE, DinoDisc
 from utils import arg_util, misc, nan
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
@@ -152,7 +152,6 @@ class VAETrainer(object):
         # [vae loss]
         with maybe_record_function('VAE_rec'):
             with self.vae_opt.amp_ctx:
-                self.vae_wo_ddp.forward
                 rec_B3HW, usage, Lkl = self.vae(inp, ret_usages=loggable)
                 # usage is None for continuous VAE, but kept for compatibility
                 if loggable and usage is not None:
@@ -176,8 +175,6 @@ class VAETrainer(object):
             
             using_lpips = inp.shape[-2] >= self.lp_reso and self.wei_lpips > 0
             if using_lpips:
-                self.lpips_loss.forward
-                
                 Lpip = self.lpips_loss(
                     self._as_rgb_for_pretrained(inp),
                     self._as_rgb_for_pretrained(rec_B3HW),
@@ -193,7 +190,6 @@ class VAETrainer(object):
                 for d in self.disc_params: d.requires_grad = False
                 self.disc_wo_ddp.eval()
                 with self.disc_opt.amp_ctx:
-                    self.disc_wo_ddp.forward
                     Lg = -self.disc_wo_ddp(self.daug.aug(self._disc_input_pm1(rec_B3HW), fade_blur_schedule), grad_ckpt=False).mean()  # todo: aug or not?
                 self.disc_wo_ddp.train()
                 
@@ -229,7 +225,6 @@ class VAETrainer(object):
             wei_g = None
         
         # todo: G D backward together;   less calling .item()
-        # todo: G D backward together;   less calling .item()
         with maybe_record_function('VAE_backward'):
             grad_norm_g, scale_log2_g = self.vae_opt.backward_clip_step(stepping=stepping, loss=Lv)
         
@@ -238,7 +233,6 @@ class VAETrainer(object):
             with maybe_record_function('Disc_forward'):
                 for d in self.disc_params: d.requires_grad = True
                 with self.disc_opt.amp_ctx:
-                    self.disc_wo_ddp.forward
                     logits = self.disc(self.daug.aug(self._disc_input_pm1(inp_rec_no_grad), fade_blur_schedule), grad_ckpt=self.disc_grad_ckpt).float()
                 
                 logits_real, logits_fake = logits[:B], logits[B:]
@@ -249,7 +243,6 @@ class VAETrainer(object):
             if self.bcr:
                 with maybe_record_function('Disc_bCR'):
                     with self.disc_opt.amp_ctx:
-                        self.disc_wo_ddp.forward
                         logits2 = self.disc(self.bcr_strong_aug.aug(self._disc_input_pm1(inp_rec_no_grad), 0.0), grad_ckpt=self.disc_grad_ckpt).float()
                     Lbcr = F.mse_loss(logits2, logits).mul_(self.bcr)
                     Ld += Lbcr
@@ -261,7 +254,6 @@ class VAETrainer(object):
                     self.disc_wo_ddp.eval()
                     with torch.cuda.amp.autocast(enabled=False):    # todo: why AMP is disabled in this disc forward?
                         inp.requires_grad_(True)
-                        self.disc_wo_ddp.forward
                         grad_real = torch.autograd.grad(outputs=self.disc(self.daug.aug(self._disc_input_pm1(inp), fade_blur_schedule), grad_ckpt=False).sum(), inputs=inp, create_graph=True)[0]
                         Lreg = grad_real.square().flatten(1).sum(dim=1).mean()
                         Ld += self.reg * Lreg

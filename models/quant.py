@@ -2,10 +2,8 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
-from torch import distributed as tdist, nn as nn
+from torch import nn as nn
 from torch.nn import functional as F
-
-import dist
 
 
 # this file provides the ContinuousMultiScaleQuantizer for continuous VAE
