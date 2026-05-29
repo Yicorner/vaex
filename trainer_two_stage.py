@@ -802,12 +802,28 @@ class TwoStageVAETrainer(object):
 
             tot += inp.shape[0]
 
-        rec_loss_mean = rec_loss / tot
-        psnr_mean = psnr_sum / tot
-        ssim_mean = ssim_sum / tot
+        device = next(eval_model.parameters()).device
+        stats = torch.tensor(
+            [rec_loss, psnr_sum, ssim_sum, align_loss_sum, float(tot)],
+            device=device,
+            dtype=torch.float64,
+        )
+        dist.allreduce(stats)
+        tot_g = max(round(stats[4].item()), 1)
+        rec_loss_mean = stats[0].item() / tot_g
+        psnr_mean = stats[1].item() / tot_g
+        ssim_mean = stats[2].item() / tot_g
+        align_loss_mean = stats[3].item() / tot_g
+
+        if self.training_stage == 1:
+            eval_model.train()
+        else:
+            eval_model.train()
+            lr_eval_model.train()
+
         if self.training_stage == 1:
             return rec_loss_mean, psnr_mean, ssim_mean
-        return rec_loss_mean, psnr_mean, ssim_mean, align_loss_sum / max(tot, 1)
+        return rec_loss_mean, psnr_mean, ssim_mean, align_loss_mean
 
     def state_dict(self):
         state = {

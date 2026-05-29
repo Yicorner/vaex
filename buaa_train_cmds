@@ -1,0 +1,127 @@
+# BUAA 服务器 — stage2 灰度 no-KL 训练（原始 torchrun，不用 train.sh）
+#
+# 数据: /media/why/Raid524T/QBH/data/brats_256_t2_2021_pair_png_with_ref
+# 在 myvaex 目录下执行；先激活你的 conda 环境。
+#
+# 输出目录结构（--bed 与 --local_out_dir_path 设为同一路径）:
+#   local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl/
+#     reconstruction/          # 对比图
+#     run_metadata.json        # 训练参数清单（写在 local_out_dir_path 根目录）
+#     tb-stage2_gray_.../      # TensorBoard（代码自动生成子目录名）
+#     ckpt-0.pth, ckpt-last.pth, ckpt-best.pth
+#     backup1_stdout.txt, backup2_stderr.txt, log.txt
+#
+# 说明: 当前代码没有单独的 --diagnostics 参数；若需要 diagnostics/ 目录需改代码或训练后手动整理。
+
+cd /media/why/Raid524T/QBH/work/myvaex
+
+export CUDA_VISIBLE_DEVICES=0
+
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13333 train_two_stage.py \
+  --exp_name=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+  --bed=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+  --local_out_dir_path=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl \
+  --exp_note="single-channel stage2 deterministic AE; scale0 decoded image aligned to LR pixels" \
+  --data=/media/why/Raid524T/QBH/data/brats_256_t2_2021_pair_png_with_ref \
+  --lr_folder=LR \
+  --hr_folder=HR \
+  --training_stage=2 \
+  --use_lr_hr_alignment=True \
+  --alignment_loss_type=scale0_image \
+  --alignment_loss_weight=0.25 \
+  --alignment_loss_warmup_ep=0 \
+  --stage2_use_kl=False \
+  --lbs=4 \
+  --ep=3 \
+  --val_and_saving_per_ep=1 \
+  --lr_img_size=256 \
+  --img_channels=1 \
+  --lr_ch=128 \
+  --lr_vocab_width=32 \
+  --lr_vq_beta=1e-3 \
+  --lr_kl_warmup_ep=1.0 \
+  --vocab_width=32 \
+  --vq_beta=0.25 \
+  --patch_nums 4 5 6 8 10 13 16 \
+  --vae_lr=1e-4 \
+  --disc_lr=1e-4 \
+  --disc_norm=gn \
+  --disc_spec_norm=False \
+  --disc_aug_prob=0.0 \
+  --disc_grad_ckpt=False \
+  --l1=1.0 \
+  --l2=0.25 \
+  --lp=0.25 \
+  --lpr=48 \
+  --ld=-0.05 \
+  --disc_start_ep=1.0 \
+  --disc_warmup_ep=1.0 \
+  --save_reconstruction_images=True \
+  --reconstruction_save_interval=0 \
+  --reconstruction_max_samples=4 \
+  --reconstruction_dir_name=reconstruction \
+  --train_log_points_per_epoch=100 \
+  --dbg_nan=True
+
+# =============================================================================
+# 四卡 RTX 4090（DDP）
+# =============================================================================
+# 单卡参考 (lbs=4): ~18.7GB / 49GB 显存, ~393W；显存余量约 2.5x，可把每卡 lbs 提到 8。
+# 全局 batch: lbs=8 x 4 GPU = 32（单卡 lbs=4 时全局为 4，约 8 倍吞吐）。
+# 学习率按 sqrt(全局batch倍率) 粗调: 1e-4 * sqrt(8) ≈ 2.8e-4，取 2e-4 更稳；若 loss 震荡可退回 1e-4。
+# workers=4 减轻 DataLoader 成为瓶颈（每 rank 独立 worker，默认 workers=1 时四卡易饿死 GPU）。
+#
+# 多卡 I/O：仅 rank0(is_master) 写重建图 / TensorBoard；仅 local_rank0 写 backup*.txt 与 ckpt，不会多卡抢写。
+# 已修复 trainer_two_stage.eval_ep 的 dist.allreduce，验证指标与 ckpt-best 在四卡下与全量 val 一致。
+#
+# ep=100 调度说明（train_two_stage 按 iteration 做 cos 退火，单位均为 epoch）:
+#   warmup_ep     : VAE/LR 优化器 LR 线性预热长度；=0 时自动 ep*0.01=1（100ep 太短），建议显式 5
+#   disc_start_ep : 第几个 epoch 起启用判别器；=0 时自动 0.2*ep=20（GAN 很晚，前 20ep 易糊）
+#   disc_warmup_ep: 判别器 LR 预热长度（从 disc_start 起算）；=0 时自动 0.02*ep=2
+#   sche / sche_end: 预热后余弦退火，末期 LR = peak * sche_end（默认 cos + 0.3）
+#   3ep 短跑用的 disc_start=1/disc_warmup=1 可直接搬来 100ep；想更稳可改为 disc_start=5
+#   若收敛仍慢可试 vae_lr/disc_lr=3e-4；震荡则退回 2e-4
+
+export CUDA_VISIBLE_DEVICES=0,2,3
+
+torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13334 train_two_stage.py \
+  --exp_name=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu \
+  --bed=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu \
+  --local_out_dir_path=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu \
+  --exp_note="4x4090 DDP ep100; lbs=8 bs=32; warmup1; disc@ep1" \
+  --data=/media/why/Raid524T/QBH/data/brats_256_t2_2021_pair_png_with_ref \
+  --lr_folder=LR \
+  --hr_folder=HR \
+  --training_stage=2 \
+  --use_lr_hr_alignment=True \
+  --alignment_loss_type=scale0_image \
+  --alignment_loss_weight=0.25 \
+  --alignment_loss_warmup_ep=0 \
+  --stage2_use_kl=False \
+  --lbs=8 \
+  --workers=4 \
+  --ep=100 \
+  --val_and_saving_per_ep=3 \
+  --lr_img_size=256 \
+  --img_channels=1 \
+  --vocab_width=32 \
+  --patch_nums 4 5 6 8 10 13 16 \
+  --vae_lr=3e-4 \
+  --disc_lr=3e-4 \
+  --disc_norm=gn \
+  --disc_spec_norm=True \
+  --disc_aug_prob=0.5 \
+  --disc_grad_ckpt=False \
+  --l1=1.0 \
+  --l2=0.25 \
+  --lp=0.25 \
+  --lpr=48 \
+  --ld=-0.05 \
+  --disc_start_ep=5.0 \
+  --disc_warmup_ep=1.0 \
+  --save_reconstruction_images=True \
+  --reconstruction_save_interval=0 \
+  --reconstruction_max_samples=4 \
+  --reconstruction_dir_name=reconstruction \
+  --train_log_points_per_epoch=8 \
+  --dbg_nan=True 2>&1 | tee -a train.log
