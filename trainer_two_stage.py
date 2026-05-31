@@ -27,7 +27,12 @@ from models import DinoDisc, LR_VAE, VQVAE
 from utils import arg_util, misc
 from utils.amp_opt import AmpOptimizer
 from utils.diffaug import DiffAug
-from utils.image_saver import compute_psnr_ssim, save_reconstruction_comparison, save_reconstruction_run_metadata
+from utils.image_saver import (
+    compute_psnr_ssim,
+    save_reconstruction_comparison,
+    save_reconstruction_run_metadata,
+    save_stage2_scale0_lr_diagnostic,
+)
 from utils.loss import hinge_loss, linear_loss, softplus_loss
 from utils.lpips import LPIPS
 
@@ -153,6 +158,9 @@ class TwoStageVAETrainer(object):
         default_dir_name = 'reconstruction_samples_lr' if self.training_stage == 1 else 'reconstruction_samples_hr'
         dir_name = args.reconstruction_dir_name.strip() or default_dir_name
         return os.path.join(args.local_out_dir_path, dir_name)
+
+    def _get_diagnostic_save_dir(self, args: arg_util.Args) -> str:
+        return os.path.join(args.local_out_dir_path, 'diagnostic')
 
     def _should_save_reconstruction(self, it: int, metric_lg: misc.MetricLogger, args: arg_util.Args) -> bool:
         interval = max(int(getattr(args, 'reconstruction_save_interval', 0)), 0)
@@ -414,6 +422,30 @@ class TwoStageVAETrainer(object):
         lr_img_target = self._resize_image_like(inp_lr, scale0_img).detach()
         return F.l1_loss(scale0_img, lr_img_target)
 
+    @torch.no_grad()
+    def _save_stage2_scale0_diagnostic(
+        self,
+        inp_lr: torch.Tensor,
+        hr_scale_latent: torch.Tensor,
+        save_dir: str,
+        ep: int,
+        it: int,
+        max_samples: int,
+    ) -> None:
+        scale0_img = self.vae_wo_ddp.scale_latent_to_img(
+            hr_scale_latent.detach(),
+            scale_index=self.alignment_scale_index,
+            clamp=True,
+        )
+        save_stage2_scale0_lr_diagnostic(
+            lr=inp_lr,
+            decode_scale0_img=scale0_img,
+            save_dir=save_dir,
+            ep=ep,
+            it=it,
+            max_samples=max_samples,
+        )
+
     def train_step_stage1(
         self,
         ep: int,
@@ -672,7 +704,12 @@ class TwoStageVAETrainer(object):
                 L_align=L_align.item(),
                 W_align=effective_align_weight,
             )
-            if args.save_reconstruction_images and dist.is_master() and self._should_save_reconstruction(it, metric_lg, args):
+            should_save_vis = (
+                args.save_reconstruction_images
+                and dist.is_master()
+                and self._should_save_reconstruction(it, metric_lg, args)
+            )
+            if should_save_vis:
                 try:
                     save_dir = self._get_reconstruction_save_dir(args)
                     self._record_reconstruction_metadata(save_dir, args)
@@ -691,6 +728,23 @@ class TwoStageVAETrainer(object):
                     )
                 except Exception as e:
                     print(f'[Warning] Failed to save HR reconstruction images: {e}', flush=True)
+            if (
+                should_save_vis
+                and self.use_alignment_loss
+                and self.alignment_loss_type == 'scale0_image'
+                and hr_scale_latent is not None
+            ):
+                try:
+                    self._save_stage2_scale0_diagnostic(
+                        inp_lr=inp_lr,
+                        hr_scale_latent=hr_scale_latent,
+                        save_dir=self._get_diagnostic_save_dir(args),
+                        ep=ep,
+                        it=it,
+                        max_samples=args.reconstruction_max_samples,
+                    )
+                except Exception as e:
+                    print(f'[Warning] Failed to save stage2 scale0 LR diagnostic images: {e}', flush=True)
 
         return grad_norm_g, scale_log2_g, grad_norm_d, scale_log2_d
 

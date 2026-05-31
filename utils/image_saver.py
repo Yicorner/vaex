@@ -203,6 +203,45 @@ def save_stage3_alignment_comparison(
     return filepath
 
 
+def save_stage2_scale0_lr_diagnostic(
+    lr: torch.Tensor,
+    decode_scale0_img: torch.Tensor,
+    save_dir: str,
+    ep: int,
+    it: int,
+    max_samples: int = 4,
+) -> str:
+    """Save ``LR | decode_s0(HR_scale0)`` for stage-2 scale0 image alignment.
+
+    ``decode_scale0_img`` is the scale0-only decode used by ``L_align`` (HR latent,
+    shared decoder), not the full multi-scale HR reconstruction.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    lr_denorm = denormalize_image(lr.clone())
+    decode_denorm = denormalize_image(decode_scale0_img.clone())
+
+    if lr_denorm.shape[-2:] != decode_denorm.shape[-2:]:
+        lr_denorm = torch.nn.functional.interpolate(
+            lr_denorm, size=decode_denorm.shape[-2:], mode='bicubic', align_corners=False
+        ).clamp_(0, 1)
+
+    num_samples = min(lr.shape[0], max_samples)
+    tiles = []
+    for i in range(num_samples):
+        tiles.extend([lr_denorm[i], decode_denorm[i]])
+
+    grid = torchvision.utils.make_grid(
+        torch.stack(tiles, dim=0),
+        nrow=2,
+        padding=2,
+        pad_value=1.0,
+    )
+    filepath = os.path.join(save_dir, f"ep{ep:04d}_it{it:06d}_scale0_lr.png")
+    tensor_to_pil_image(grid).save(filepath)
+    return filepath
+
+
 def save_reconstruction_run_metadata(
     save_dir: str,
     args_state: Dict[str, Any],
