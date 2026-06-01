@@ -219,6 +219,60 @@ torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --m
   --train_log_points_per_epoch=8 \
   --dbg_nan=True 2>&1 | tee -a train.log
 
+# --- stage2 resume: load finished run ckpt-last, continue to ep40 in a NEW bed ---
+export CUDA_VISIBLE_DEVICES=0,2,3
+
+STAGE2_PREV_BED=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5
+STAGE2_RESUME_CKPT="${STAGE2_PREV_BED}/ckpt-last.pth"
+STAGE2_BED=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss
+mkdir -p "$STAGE2_BED"
+
+torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13335 train_two_stage.py \
+  --exp_name=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss \
+  --bed="$STAGE2_BED" \
+  --local_out_dir_path="$STAGE2_BED" \
+  --resume="$STAGE2_RESUME_CKPT" \
+  --exp_note="resume from ${STAGE2_PREV_BED}/ckpt-last (ep20 done); new bed; extend to ep40" \
+  --data=/media/why/Raid524T/QBH/data/brats_256_t2_2021_pair_png_with_ref \
+  --lr_folder=LR \
+  --hr_folder=HR \
+  --training_stage=2 \
+  --use_lr_hr_alignment=True \
+  --alignment_loss_type=scale0_image \
+  --alignment_loss_weight=5 \
+  --alignment_loss_warmup_ep=0 \
+  --stage2_use_kl=False \
+  --lbs=8 \
+  --workers=4 \
+  --ep=40 \
+  --val_and_saving_per_ep=4 \
+  --lr_img_size=256 \
+  --img_channels=1 \
+  --vocab_width=32 \
+  --patch_nums 8 10 13 16 \
+  --vae_lr=3e-4 \
+  --disc_lr=3e-4 \
+  --disc_norm=gn \
+  --disc_spec_norm=True \
+  --disc_aug_prob=0.5 \
+  --disc_grad_ckpt=False \
+  --l1=1.0 \
+  --l2=0.25 \
+  --lp=0.25 \
+  --lpr=48 \
+  --ld=-0.05 \
+  --disc_start_ep=3.0 \
+  --disc_warmup_ep=1.0 \
+  --save_reconstruction_images=True \
+  --reconstruction_save_interval=0 \
+  --reconstruction_max_samples=4 \
+  --reconstruction_dir_name=reconstruction \
+  --train_log_points_per_epoch=8 \
+  --use_stage2_mid_scale_loss=True \
+  --stage2_mid_scale_indices=1 2 \
+  --stage2_mid_scale_weights=0.05 0.05 \
+  --dbg_nan=True 2>&1 | tee -a "$STAGE2_BED/train.log"
+
 export CUDA_VISIBLE_DEVICES=0,2,3
 
 # stage3_latent_size MUST equal stage2 patch_nums[0] saved in ckpt (here 8 for align_weight_5).

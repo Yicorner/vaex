@@ -78,6 +78,9 @@ def build_two_stage_trainer(args: arg_util.Args):
         print(line)
     # Tap may parse tuple CLI args as strings; normalize once to avoid silent int-vs-str mismatches.
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
+    args.stage2_mid_scale_indices = tuple(int(x) for x in args.stage2_mid_scale_indices)
+    args.stage2_mid_scale_weights = tuple(float(x) for x in args.stage2_mid_scale_weights)
+    args.use_stage2_mid_scale_loss = TwoStageVAETrainer._normalize_bool(args.use_stage2_mid_scale_loss)
     args.img_channels = int(args.img_channels)
     if args.img_channels not in (1, 3):
         raise ValueError(f'img_channels must be 1 or 3, got {args.img_channels}')
@@ -163,6 +166,13 @@ def build_two_stage_trainer(args: arg_util.Args):
         )
         if args.use_lr_hr_alignment and args.alignment_loss_type == 'scale0_image':
             print('[alignment] scale0_image decodes HR scale[0] and compares it to resized LR pixels; stage1 LR latent is not required.')
+        if args.use_stage2_mid_scale_loss:
+            patch_nums = tuple(vae_wo_ddp.quantize.v_patch_nums)
+            pairs = [
+                f'idx={si} pn={patch_nums[si]} w={w}'
+                for si, w in zip(args.stage2_mid_scale_indices, args.stage2_mid_scale_weights)
+            ]
+            print(f'[stage2 mid-scale loss] band-limited cumulative L1: {", ".join(pairs)}')
 
     optimizers: List[AmpOptimizer] = []
     optimizer_specs = [
@@ -256,6 +266,9 @@ def build_two_stage_trainer(args: arg_util.Args):
         alignment_loss_warmup_ep=args.alignment_loss_warmup_ep,
         alignment_scale_index=0,
         stage2_use_kl=args.stage2_use_kl,
+        use_stage2_mid_scale_loss=args.use_stage2_mid_scale_loss,
+        stage2_mid_scale_indices=args.stage2_mid_scale_indices,
+        stage2_mid_scale_weights=args.stage2_mid_scale_weights,
         dbg_unused=args.dbg_unused,
         dbg_nan=args.dbg_nan,
     )

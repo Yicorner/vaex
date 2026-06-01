@@ -75,6 +75,9 @@ class Args(Tap):
     alignment_loss_weight: float = 0.5  # stage-2 auxiliary alignment weight
     alignment_loss_warmup_ep: float = 0.0  # linearly ramp alignment weight over N epochs; 0 disables warmup
     stage2_use_kl: bool = True       # stage-2 VAE mode; False uses posterior mean and zero KL loss (deterministic AE)
+    use_stage2_mid_scale_loss: bool = False  # band-limited L1 on intermediate cumulative scale decodes
+    stage2_mid_scale_indices: tuple = (1, 2)  # patch_nums indices (e.g. 10 and 13 for patch_nums 8 10 13 16)
+    stage2_mid_scale_weights: tuple = (0.05, 0.05)  # per-index weights, aligned with stage2_mid_scale_indices
     lr_vae_resume: str = ''         # optional stage-2 warm start for legacy latent alignment
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
 

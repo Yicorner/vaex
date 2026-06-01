@@ -99,6 +99,9 @@ ALIGNMENT_LOSS_TYPE_KEY=$(printf '%s' "$ALIGNMENT_LOSS_TYPE" | tr '[:upper:]' '[
 ALIGNMENT_LOSS_WEIGHT_OVERRIDE=${ALIGNMENT_LOSS_WEIGHT:-${alignment_loss_weight:-}}
 ALIGNMENT_LOSS_WARMUP_EP=${ALIGNMENT_LOSS_WARMUP_EP:-${alignment_loss_warmup_ep:-0.0}}
 STAGE2_USE_KL=${STAGE2_USE_KL:-${stage2_use_kl:-True}}
+USE_STAGE2_MID_SCALE_LOSS=${USE_STAGE2_MID_SCALE_LOSS:-${use_stage2_mid_scale_loss:-True}}
+STAGE2_MID_SCALE_INDICES=${STAGE2_MID_SCALE_INDICES:-${stage2_mid_scale_indices:-"1 2"}}
+STAGE2_MID_SCALE_WEIGHTS=${STAGE2_MID_SCALE_WEIGHTS:-${stage2_mid_scale_weights:-"0.05 0.05"}}
 STAGE2_USE_KL_KEY=$(printf '%s' "$STAGE2_USE_KL" | tr '[:upper:]' '[:lower:]')
 STAGE2_KL_DISABLED=0
 if [ "$STAGE2_USE_KL_KEY" = "false" ] || [ "$STAGE2_USE_KL_KEY" = "0" ] || [ "$STAGE2_USE_KL_KEY" = "no" ]; then
@@ -259,6 +262,9 @@ elif [ "$STAGE" = "2" ]; then
   --alignment_loss_weight="$ALIGNMENT_LOSS_WEIGHT" \
   --alignment_loss_warmup_ep="$ALIGNMENT_LOSS_WARMUP_EP" \
   --stage2_use_kl="$STAGE2_USE_KL" \
+  --use_stage2_mid_scale_loss="$USE_STAGE2_MID_SCALE_LOSS" \
+  --stage2_mid_scale_indices $STAGE2_MID_SCALE_INDICES \
+  --stage2_mid_scale_weights $STAGE2_MID_SCALE_WEIGHTS \
   "${LR_VAE_RESUME_ARGS[@]}" \
   --lbs=4 \
   --ep="${STAGE2_EP:-${EP_COMMON:-150}}" \

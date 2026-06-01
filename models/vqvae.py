@@ -66,7 +66,9 @@ class VQVAE(nn.Module):
         ret_scale_posterior_stats: bool = False,
         scale_index: int = 0,
         use_kl: bool = True,
-    ):   # -> rec_B3HW, usages, kl_loss
+        ret_mid_scale_recs: bool = False,
+        mid_scale_indices: Optional[Sequence[int]] = None,
+    ):   # -> rec_B3HW, usages, kl_loss, ...
         """
          for continuous multi-scale VAE training.
 
@@ -82,18 +84,42 @@ class VQVAE(nn.Module):
             usages: usage statistics (None for continuous VAE)
             kl_loss: KL divergence loss
             optional scale_mean, scale_logvar: posterior stats for alignment
+            optional mid_scale_recs: cumulative decoded images at selected scale indices
         """
         # Encode, quantize, and decode. In AE mode, quantize uses posterior means.
         f = self.quant_conv(self.encoder(inp))
         if ret_scale_posterior_stats:
             scale_mean, scale_logvar = self.quantize.get_scale_posterior_stats(f, scale_index=scale_index)
-        f_hat, usages, kl_loss = self.quantize(f, ret_usages=ret_usages, use_kl=use_kl)
+        quant_out = self.quantize(
+            f,
+            ret_usages=ret_usages,
+            use_kl=use_kl,
+            ret_cumulative_fhat=ret_mid_scale_recs,
+        )
+        if ret_mid_scale_recs:
+            f_hat, usages, kl_loss, ls_cumulative_fhat = quant_out
+        else:
+            f_hat, usages, kl_loss = quant_out
         rec_B3HW = self.decoder(self.post_quant_conv(f_hat))
 
+        mid_scale_recs = None
+        if ret_mid_scale_recs:
+            indices = tuple(mid_scale_indices if mid_scale_indices is not None else (1, 2))
+            post_quant = self.post_quant_conv
+            decoder = self.decoder
+            mid_scale_recs = {
+                si: decoder(post_quant(ls_cumulative_fhat[si]))
+                for si in indices
+            }
+
+        out = [rec_B3HW, usages, kl_loss]
         if ret_scale_posterior_stats:
-            return rec_B3HW, usages, kl_loss, scale_mean, scale_logvar
-        
-        return rec_B3HW, usages, kl_loss
+            out.extend([scale_mean, scale_logvar])
+        if ret_mid_scale_recs:
+            out.append(mid_scale_recs)
+        if len(out) == 3:
+            return rec_B3HW, usages, kl_loss
+        return tuple(out)
     # ===================== `forward` is only used in VAE training =====================
 
     def forward_with_scale_posterior_stats(

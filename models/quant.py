@@ -123,7 +123,13 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         return posterior.mean, posterior.logvar
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, f_BChw: torch.Tensor, ret_usages=False, use_kl: bool = True) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+    def forward(
+        self,
+        f_BChw: torch.Tensor,
+        ret_usages=False,
+        use_kl: bool = True,
+        ret_cumulative_fhat: bool = False,
+    ) -> Union[Tuple[torch.Tensor, List[float], torch.Tensor], Tuple[torch.Tensor, List[float], torch.Tensor, List[torch.Tensor]]]:
         """
         Forward pass for continuous multi-scale VAE.
         
@@ -144,6 +150,7 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         # For continuous VAE with multi-scale: process residuals at each scale
         f_rest = f_BChw.clone()  # clone to avoid in-place modification, but keep gradient flow
         f_hat = torch.zeros_like(f_rest)
+        ls_cumulative_fhat: List[torch.Tensor] = [] if ret_cumulative_fhat else []
         
         with torch.amp.autocast('cuda', enabled=False):
             total_kl_loss = f_BChw.new_zeros(())
@@ -193,6 +200,8 @@ class ContinuousMultiScaleQuantizer(nn.Module):
                 # Accumulate features
                 f_hat = f_hat + h_BChw
                 f_rest = f_rest - h_BChw  # update residual
+                if ret_cumulative_fhat:
+                    ls_cumulative_fhat.append(f_hat.clone())
                 
                 if use_kl:
                     # Accumulate KL loss with per-scale normalization
@@ -210,6 +219,8 @@ class ContinuousMultiScaleQuantizer(nn.Module):
         # usages is None for continuous VAE (no discrete codebook)
         usages = None
         
+        if ret_cumulative_fhat:
+            return f_hat.to(dtype), usages, total_kl_loss, ls_cumulative_fhat
         return f_hat.to(dtype), usages, total_kl_loss
     # ===================== `forward` is only used in VAE training =====================
     
