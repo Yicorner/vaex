@@ -242,6 +242,58 @@ def save_stage2_scale0_lr_diagnostic(
     return filepath
 
 
+def _resize_bicubic_to(tensor: torch.Tensor, target_hw: torch.Size) -> torch.Tensor:
+    if tensor.shape[-2:] == target_hw:
+        return tensor
+    return torch.nn.functional.interpolate(
+        tensor, size=tuple(target_hw), mode='bicubic', align_corners=False,
+    ).clamp_(0, 1)
+
+
+def save_stage2_multiscale_diagnostic(
+    lr: torch.Tensor,
+    hr_by_scale: List[torch.Tensor],
+    hr_gt: torch.Tensor,
+    save_dir: str,
+    ep: int,
+    it: int,
+    max_samples: int = 4,
+) -> Optional[str]:
+    """Save cumulative per-scale HR decodes: ``LR | s0 | s0+s1 | ... | HR_gt``.
+
+    ``hr_by_scale[i]`` is the image after accumulating scales ``0..i`` through the
+    frozen multi-scale VAE path (same semantics as var multiscale diagnostics).
+    """
+    if not hr_by_scale:
+        return None
+    os.makedirs(save_dir, exist_ok=True)
+
+    lr_denorm = denormalize_image(lr.clone())
+    gt_denorm = denormalize_image(hr_gt.clone())
+    target_hw = gt_denorm.shape[-2:]
+    lr_up = _resize_bicubic_to(lr_denorm, target_hw)
+    scale_imgs = [_resize_bicubic_to(denormalize_image(img.clone()), target_hw) for img in hr_by_scale]
+
+    num_samples = min(gt_denorm.shape[0], max_samples)
+    tiles: List[torch.Tensor] = []
+    for i in range(num_samples):
+        tiles.append(lr_up[i])
+        for img in scale_imgs:
+            tiles.append(img[i])
+        tiles.append(gt_denorm[i])
+
+    nrow = 2 + len(scale_imgs)
+    grid = torchvision.utils.make_grid(
+        torch.stack(tiles, dim=0),
+        nrow=nrow,
+        padding=2,
+        pad_value=1.0,
+    )
+    filepath = os.path.join(save_dir, f"ep{ep:04d}_it{it:06d}_multiscale.png")
+    tensor_to_pil_image(grid).save(filepath)
+    return filepath
+
+
 def save_reconstruction_run_metadata(
     save_dir: str,
     args_state: Dict[str, Any],

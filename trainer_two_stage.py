@@ -31,6 +31,7 @@ from utils.image_saver import (
     compute_psnr_ssim,
     save_reconstruction_comparison,
     save_reconstruction_run_metadata,
+    save_stage2_multiscale_diagnostic,
     save_stage2_scale0_lr_diagnostic,
 )
 from utils.loss import hinge_loss, linear_loss, softplus_loss
@@ -446,6 +447,38 @@ class TwoStageVAETrainer(object):
             max_samples=max_samples,
         )
 
+    @torch.no_grad()
+    def _cumulative_scale_reconstructions(self, inp_hr: FTen) -> list:
+        """HR images after each cumulative multi-scale latent (eval / posterior mean)."""
+        vae = self.vae_wo_ddp
+        was_training = vae.training
+        vae.eval()
+        try:
+            return vae.img_to_reconstructed_img(inp_hr, last_one=False)
+        finally:
+            vae.train(was_training)
+
+    @torch.no_grad()
+    def _save_stage2_multiscale_diagnostic(
+        self,
+        inp_lr: FTen,
+        inp_hr: FTen,
+        save_dir: str,
+        ep: int,
+        it: int,
+        max_samples: int,
+    ) -> None:
+        hr_by_scale = self._cumulative_scale_reconstructions(inp_hr)
+        save_stage2_multiscale_diagnostic(
+            lr=inp_lr,
+            hr_by_scale=hr_by_scale,
+            hr_gt=inp_hr,
+            save_dir=save_dir,
+            ep=ep,
+            it=it,
+            max_samples=max_samples,
+        )
+
     def train_step_stage1(
         self,
         ep: int,
@@ -728,6 +761,17 @@ class TwoStageVAETrainer(object):
                     )
                 except Exception as e:
                     print(f'[Warning] Failed to save HR reconstruction images: {e}', flush=True)
+                try:
+                    self._save_stage2_multiscale_diagnostic(
+                        inp_lr=inp_lr,
+                        inp_hr=inp_hr,
+                        save_dir=self._get_diagnostic_save_dir(args),
+                        ep=ep,
+                        it=it,
+                        max_samples=args.reconstruction_max_samples,
+                    )
+                except Exception as e:
+                    print(f'[Warning] Failed to save stage2 multiscale diagnostic images: {e}', flush=True)
             if (
                 should_save_vis
                 and self.use_alignment_loss
