@@ -270,7 +270,7 @@ torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --m
   --train_log_points_per_epoch=8 \
   --use_stage2_mid_scale_loss=True \
   --stage2_mid_scale_indices=1 2 \
-  --stage2_mid_scale_weights=0.05 0.05 \
+  --stage2_mid_scale_weights=2.5 2.5 \
   --dbg_nan=True 2>&1 | tee -a "$STAGE2_BED/train.log"
 
 export CUDA_VISIBLE_DEVICES=0,2,3
