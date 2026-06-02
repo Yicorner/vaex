@@ -69,6 +69,37 @@ def print_title(args: arg_util.Args):
         print(border + '\n', flush=True)
 
 
+def _cli_has_arg(flag: str) -> bool:
+    return any(token == flag or token.startswith(f'{flag}=') for token in sys.argv[1:])
+
+
+def _reapply_stage2_mid_scale_cli_overrides(trainer: TwoStageVAETrainer, args: arg_util.Args) -> None:
+    has_use_override = _cli_has_arg('--use_stage2_mid_scale_loss')
+    has_value_override = (
+        _cli_has_arg('--stage2_mid_scale_indices')
+        or _cli_has_arg('--stage2_mid_scale_weights')
+    )
+    if not (has_use_override or has_value_override):
+        return
+
+    use_mid = args.use_stage2_mid_scale_loss if has_use_override else trainer.use_stage2_mid_scale_loss
+    indices = args.stage2_mid_scale_indices if has_value_override else trainer.stage2_mid_scale_indices
+    weights = args.stage2_mid_scale_weights if has_value_override else trainer.stage2_mid_scale_weights
+    trainer.configure_stage2_mid_scale_loss(use_mid, indices, weights)
+    if dist.is_master():
+        patch_nums = tuple(trainer.vae_wo_ddp.quantize.v_patch_nums)
+        pairs = [
+            f'idx={si} pn={patch_nums[si]} w={w}'
+            for si, w in zip(trainer.stage2_mid_scale_indices, trainer.stage2_mid_scale_weights)
+            if 0 <= si < len(patch_nums)
+        ]
+        print(
+            '[resume override] stage2 mid-scale config from CLI: '
+            f'enabled={trainer.use_stage2_mid_scale_loss}; {", ".join(pairs)}',
+            flush=True,
+        )
+
+
 def build_two_stage_trainer(args: arg_util.Args):
     auto_resume_info, start_ep, start_it, trainer_state, _ = maybe_auto_resume(args)
     tb_lg = create_tb_lg(args)
@@ -275,6 +306,7 @@ def build_two_stage_trainer(args: arg_util.Args):
 
     if trainer_state:
         trainer.load_state_dict(trainer_state, strict=False)
+        _reapply_stage2_mid_scale_cli_overrides(trainer, args)
 
     if args.training_stage == 2 and args.lr_vae_resume and not trainer_state:
         ckpt = torch.load(args.lr_vae_resume, map_location='cpu')

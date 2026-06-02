@@ -299,11 +299,39 @@ class Args(Tap):
         return f'{{\n{s}\n}}\n'
 
 
+_MULTI_VALUE_ARGS_WITH_EQUALS = {
+    '--patch_nums',
+    '--stage2_mid_scale_indices',
+    '--stage2_mid_scale_weights',
+}
+
+
+def _normalize_multi_value_cli_args(argv):
+    """Allow tuple args to be written as either ``--arg 1 2`` or ``--arg=1 2``."""
+    normalized = [argv[0]]
+    for token in argv[1:]:
+        matched_flag = None
+        for flag in _MULTI_VALUE_ARGS_WITH_EQUALS:
+            if token.startswith(f'{flag}='):
+                matched_flag = flag
+                break
+        if matched_flag is None:
+            normalized.append(token)
+            continue
+
+        normalized.append(matched_flag)
+        value = token.split('=', 1)[1]
+        if value:
+            normalized.extend(value.replace(',', ' ').split())
+    return normalized
+
+
 def init_dist_and_get_args():
     for i in range(len(sys.argv)):
         if sys.argv[i].startswith('--local-rank=') or sys.argv[i].startswith('--local_rank='):
             del sys.argv[i]
             break
+    sys.argv[:] = _normalize_multi_value_cli_args(sys.argv)
     args = Args(explicit_bool=True).parse_args(known_only=True)
     if args.local_debug:
         args.bed = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bed')

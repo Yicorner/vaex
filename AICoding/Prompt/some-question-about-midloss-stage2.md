@@ -1,0 +1,7 @@
+myvaex/local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss
+
+注意看这次训练，我有几个疑问：
+为什么加了midscaleloss之后，训练中的diagnostic multiscale图，如图@myvaex/local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss/diagnostic/ep0020_it002332_multiscale.png ，其中第四列的图像怎么看起来格格不入，不像是原图压缩分辨率之后的效果。
+以及凭你直觉分析，为什么第三列累加到 scale1（10×10） 后解码的图像就比较正常，累加到 scale2（13×13） 后解码就不是很清晰，感觉变化特别大？
+
+你可以仔细看看图片

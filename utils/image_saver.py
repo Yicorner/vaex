@@ -258,11 +258,14 @@ def save_stage2_multiscale_diagnostic(
     ep: int,
     it: int,
     max_samples: int = 4,
+    hr_targets_by_scale: Optional[Dict[int, torch.Tensor]] = None,
 ) -> Optional[str]:
     """Save cumulative per-scale HR decodes: ``LR | s0 | s0+s1 | ... | HR_gt``.
 
     ``hr_by_scale[i]`` is the image after accumulating scales ``0..i`` through the
     frozen multi-scale VAE path (same semantics as var multiscale diagnostics).
+    If provided, ``hr_targets_by_scale[i]`` is inserted immediately after
+    ``hr_by_scale[i]`` so mid-scale decodes can be compared to their targets.
     """
     if not hr_by_scale:
         return None
@@ -273,16 +276,23 @@ def save_stage2_multiscale_diagnostic(
     target_hw = gt_denorm.shape[-2:]
     lr_up = _resize_bicubic_to(lr_denorm, target_hw)
     scale_imgs = [_resize_bicubic_to(denormalize_image(img.clone()), target_hw) for img in hr_by_scale]
+    target_imgs = {}
+    for si, img in (hr_targets_by_scale or {}).items():
+        si = int(si)
+        if 0 <= si < len(scale_imgs):
+            target_imgs[si] = _resize_bicubic_to(denormalize_image(img.clone()), target_hw)
 
     num_samples = min(gt_denorm.shape[0], max_samples)
     tiles: List[torch.Tensor] = []
     for i in range(num_samples):
         tiles.append(lr_up[i])
-        for img in scale_imgs:
+        for si, img in enumerate(scale_imgs):
             tiles.append(img[i])
+            if si in target_imgs:
+                tiles.append(target_imgs[si][i])
         tiles.append(gt_denorm[i])
 
-    nrow = 2 + len(scale_imgs)
+    nrow = 2 + len(scale_imgs) + len(target_imgs)
     grid = torchvision.utils.make_grid(
         torch.stack(tiles, dim=0),
         nrow=nrow,
@@ -391,4 +401,3 @@ def save_individual_images(
         reconstructed_paths.append(recon_path)
     
     return (original_paths, reconstructed_paths)
-

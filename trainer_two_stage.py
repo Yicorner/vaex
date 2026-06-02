@@ -151,16 +151,10 @@ class TwoStageVAETrainer(object):
         self.alignment_loss_warmup_ep = max(float(alignment_loss_warmup_ep), 0.0)
         self.alignment_scale_index = alignment_scale_index
         self.stage2_use_kl = self._normalize_bool(stage2_use_kl)
-        self.stage2_mid_scale_indices = tuple(int(i) for i in stage2_mid_scale_indices)
-        self.stage2_mid_scale_weights = tuple(float(w) for w in stage2_mid_scale_weights)
-        if len(self.stage2_mid_scale_indices) != len(self.stage2_mid_scale_weights):
-            raise ValueError(
-                'stage2_mid_scale_indices and stage2_mid_scale_weights must have the same length: '
-                f'{self.stage2_mid_scale_indices=} vs {self.stage2_mid_scale_weights=}'
-            )
-        self.use_stage2_mid_scale_loss = (
-            self._normalize_bool(use_stage2_mid_scale_loss)
-            and sum(self.stage2_mid_scale_weights) > 0
+        self.configure_stage2_mid_scale_loss(
+            use_stage2_mid_scale_loss,
+            stage2_mid_scale_indices,
+            stage2_mid_scale_weights,
         )
 
         self.usage_max = 0.0
@@ -361,6 +355,24 @@ class TwoStageVAETrainer(object):
             return value.strip().lower() not in {'0', 'false', 'no', 'off'}
         return bool(value)
 
+    def configure_stage2_mid_scale_loss(
+        self,
+        use_stage2_mid_scale_loss,
+        stage2_mid_scale_indices: Sequence[int],
+        stage2_mid_scale_weights: Sequence[float],
+    ) -> None:
+        self.stage2_mid_scale_indices = tuple(int(i) for i in stage2_mid_scale_indices)
+        self.stage2_mid_scale_weights = tuple(float(w) for w in stage2_mid_scale_weights)
+        if len(self.stage2_mid_scale_indices) != len(self.stage2_mid_scale_weights):
+            raise ValueError(
+                'stage2_mid_scale_indices and stage2_mid_scale_weights must have the same length: '
+                f'{self.stage2_mid_scale_indices=} vs {self.stage2_mid_scale_weights=}'
+            )
+        self.use_stage2_mid_scale_loss = (
+            self._normalize_bool(use_stage2_mid_scale_loss)
+            and sum(self.stage2_mid_scale_weights) > 0
+        )
+
     @staticmethod
     def _normalize_alignment_loss_type(loss_type: str) -> str:
         key = str(loss_type or 'scale0_image').strip().lower().replace('-', '_')
@@ -534,6 +546,23 @@ class TwoStageVAETrainer(object):
             vae.train(was_training)
 
     @torch.no_grad()
+    def _stage2_mid_scale_targets(self, inp_hr: FTen) -> Dict[int, FTen]:
+        """Band-limited targets matching the configured mid-scale supervision."""
+        if not self.use_stage2_mid_scale_loss:
+            return {}
+
+        patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
+        max_patch_num = patch_nums[-1]
+        targets: Dict[int, FTen] = {}
+        for si, weight in zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights):
+            if weight <= 0:
+                continue
+            if si < 0 or si >= len(patch_nums):
+                raise IndexError(f'{si=} out of range for patch_nums={patch_nums}')
+            targets[si] = self._bandlimited_hr_target(inp_hr, patch_nums[si], max_patch_num)
+        return targets
+
+    @torch.no_grad()
     def _save_stage2_multiscale_diagnostic(
         self,
         inp_lr: FTen,
@@ -544,6 +573,7 @@ class TwoStageVAETrainer(object):
         max_samples: int,
     ) -> None:
         hr_by_scale = self._cumulative_scale_reconstructions(inp_hr)
+        hr_targets_by_scale = self._stage2_mid_scale_targets(inp_hr)
         save_stage2_multiscale_diagnostic(
             lr=inp_lr,
             hr_by_scale=hr_by_scale,
@@ -552,6 +582,7 @@ class TwoStageVAETrainer(object):
             ep=ep,
             it=it,
             max_samples=max_samples,
+            hr_targets_by_scale=hr_targets_by_scale,
         )
 
     def train_step_stage1(
@@ -1043,9 +1074,11 @@ class TwoStageVAETrainer(object):
         self.alignment_loss_warmup_ep = max(float(state.get('alignment_loss_warmup_ep', self.alignment_loss_warmup_ep)), 0.0)
         self.alignment_scale_index = state.get('alignment_scale_index', self.alignment_scale_index)
         self.stage2_use_kl = self._normalize_bool(state.get('stage2_use_kl', self.stage2_use_kl))
-        self.use_stage2_mid_scale_loss = state.get('use_stage2_mid_scale_loss', self.use_stage2_mid_scale_loss)
-        self.stage2_mid_scale_indices = tuple(state.get('stage2_mid_scale_indices', self.stage2_mid_scale_indices))
-        self.stage2_mid_scale_weights = tuple(state.get('stage2_mid_scale_weights', self.stage2_mid_scale_weights))
+        self.configure_stage2_mid_scale_loss(
+            state.get('use_stage2_mid_scale_loss', self.use_stage2_mid_scale_loss),
+            state.get('stage2_mid_scale_indices', self.stage2_mid_scale_indices),
+            state.get('stage2_mid_scale_weights', self.stage2_mid_scale_weights),
+        )
         if self.using_ema:
             misc.try_load_state_dict('vae_ema', self.vae_ema, state.get('vae_ema'), strict=strict)
             misc.try_load_state_dict('lr_vae_ema', self.lr_vae_ema, state.get('lr_vae_ema'), strict=strict)
@@ -1079,4 +1112,3 @@ class TwoStageVAETrainer(object):
                     for si, w in zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights)
                 ]
                 print(f'[Stage 2] Mid-scale band-limited supervision: {", ".join(pairs)}')
-
