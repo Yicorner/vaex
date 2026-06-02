@@ -325,6 +325,15 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, args: arg_util.Args,
         me.add_meter(l, misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
     me.add_meter("usage", misc.SmoothedValue(fmt='{median:.2f} ({global_avg:.2f})'))
     me.add_meter("Lkl", misc.SmoothedValue(fmt='{median:.2e} ({global_avg:.2e})'))
+    if trainer.training_stage == 2 and trainer.use_stage2_mid_scale_loss:
+        me.add_meter('L_mid', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
+        patch_nums = tuple(trainer.vae_wo_ddp.quantize.v_patch_nums)
+        for si, w in zip(trainer.stage2_mid_scale_indices, trainer.stage2_mid_scale_weights):
+            if w <= 0 or not (0 <= si < len(patch_nums)):
+                continue
+            pn = patch_nums[si]
+            me.add_meter(f'L_mid_pn{pn}', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
+            me.add_meter(f'L_midw_pn{pn}', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
     header = f'[Ep]: [{ep:4d}/{args.ep}]'
 
     if is_first_ep:

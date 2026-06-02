@@ -449,10 +449,12 @@ class TwoStageVAETrainer(object):
         self,
         inp_hr: torch.Tensor,
         mid_scale_recs: Dict[int, torch.Tensor],
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, Dict[int, torch.Tensor]]:
+        """Return weighted total and per-scale-index unweighted L1 losses."""
         patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
         max_patch_num = patch_nums[-1]
         loss = inp_hr.new_zeros(())
+        per_scale: Dict[int, torch.Tensor] = {}
         for si, weight in zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights):
             if weight <= 0:
                 continue
@@ -461,8 +463,10 @@ class TwoStageVAETrainer(object):
             if si not in mid_scale_recs:
                 raise KeyError(f'missing cumulative reconstruction for scale index {si}')
             target = self._bandlimited_hr_target(inp_hr, patch_nums[si], max_patch_num).detach()
-            loss = loss + weight * F.l1_loss(mid_scale_recs[si], target)
-        return loss
+            l1 = F.l1_loss(mid_scale_recs[si], target)
+            per_scale[si] = l1
+            loss = loss + weight * l1
+        return loss, per_scale
 
     def _forward_hr_vae_stage2(
         self,
@@ -740,8 +744,9 @@ class TwoStageVAETrainer(object):
                     align_weight_mult = 0.0
 
                 effective_align_weight = self.alignment_loss_weight * align_weight_mult
+                mid_scale_per_si: Dict[int, torch.Tensor] = {}
                 if self.use_stage2_mid_scale_loss and mid_scale_recs is not None:
-                    L_mid = self._compute_mid_scale_loss(inp_hr, mid_scale_recs)
+                    L_mid, mid_scale_per_si = self._compute_mid_scale_loss(inp_hr, mid_scale_recs)
                 else:
                     L_mid = inp_hr.new_zeros(())
                 Lg = Lnll + Lkl + effective_align_weight * L_align + L_mid
@@ -789,7 +794,7 @@ class TwoStageVAETrainer(object):
             self._ema_update(self.vae_ema, self.vae_wo_ddp)
 
         if it == 0 or it in metric_lg.log_iters:
-            metric_lg.update(
+            log_kw: Dict[str, float] = dict(
                 L1=Lrec_for_log.item(),
                 NLL=Lrec_for_log.item() + Lpip.item(),
                 Lkl=Lkl.item() if isinstance(Lkl, torch.Tensor) else Lkl,
@@ -804,6 +809,14 @@ class TwoStageVAETrainer(object):
                 W_align=effective_align_weight,
                 L_mid=L_mid.item(),
             )
+            if self.use_stage2_mid_scale_loss and mid_scale_per_si:
+                patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
+                weight_by_si = dict(zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights))
+                for si, l1 in mid_scale_per_si.items():
+                    pn = patch_nums[si]
+                    log_kw[f'L_mid_pn{pn}'] = l1.item()
+                    log_kw[f'L_midw_pn{pn}'] = (weight_by_si[si] * l1).item()
+            metric_lg.update(**log_kw)
             should_save_vis = (
                 args.save_reconstruction_images
                 and dist.is_master()
