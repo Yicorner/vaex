@@ -1,0 +1,10 @@
+python -u myvaex/eval_stage3_ckpt.py \
+--ckpt_path myvaex/local_output/stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5/ckpt-best.pth --stage2_ckpt myvaex/local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss_2/ckpt-best.pth \
+--test_dir /media/why/Raid524T/QBH/data/brats_256_t2_2021_pair_png_with_ref/test \
+--lr_folder LR \
+--hr_folder HR \
+--output_dir myvaex/local_output/stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5/eval_stage3_ckpt_stage2_mid_scale_loss_2 \
+--img_channels 1 \
+--num_samples 100 \
+--batch_size 4 \
+--device auto

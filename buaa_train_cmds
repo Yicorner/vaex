@@ -220,15 +220,15 @@ torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --m
   --dbg_nan=True 2>&1 | tee -a train.log
 
 # --- stage2 resume: load finished run ckpt-last, continue to ep40 in a NEW bed ---
-export CUDA_VISIBLE_DEVICES=0,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 STAGE2_PREV_BED=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5
 STAGE2_RESUME_CKPT="${STAGE2_PREV_BED}/ckpt-last.pth"
-STAGE2_BED=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss
+STAGE2_BED=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss_2
 mkdir -p "$STAGE2_BED"
 
-torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13335 train_two_stage.py \
-  --exp_name=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss \
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13335 train_two_stage.py \
+  --exp_name=stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss_2 \
   --bed="$STAGE2_BED" \
   --local_out_dir_path="$STAGE2_BED" \
   --resume="$STAGE2_RESUME_CKPT" \
@@ -242,10 +242,11 @@ torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --m
   --alignment_loss_weight=5 \
   --alignment_loss_warmup_ep=0 \
   --stage2_use_kl=False \
-  --lbs=8 \
+  --lbs=4 \
+  --grad_accu=2 \
   --workers=4 \
   --ep=40 \
-  --val_and_saving_per_ep=4 \
+  --val_and_saving_per_ep=3 \
   --lr_img_size=256 \
   --img_channels=1 \
   --vocab_width=32 \
@@ -273,15 +274,15 @@ torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --m
   --stage2_mid_scale_weights 2.5 2.5 \
   --dbg_nan=True 2>&1 | tee -a "$STAGE2_BED/train.log"
 
-export CUDA_VISIBLE_DEVICES=0,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2
 
 # stage3_latent_size MUST equal stage2 patch_nums[0] saved in ckpt (here 8 for align_weight_5).
-STAGE2_CKPT=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5/ckpt-best.pth
-STAGE3_BED=local_output/stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5
+STAGE2_CKPT=local_output/stage2_gray_scale0_img_align_lr256_patch4to16_no_kl_3gpu_align_weight_5_resume_mid-scale_loss_2/ckpt-best.pth
+STAGE3_BED=local_output/stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5_mid-scale_loss_2
 mkdir -p "$STAGE3_BED"
 
 torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=13337 train_stage3.py \
-  --exp_name=stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5 \
+  --exp_name=stage3_gray_lr256_to_stage2_scale0_patch8_3gpu_align_weight_5_mid \
   --bed="$STAGE3_BED" \
   --local_out_dir_path="$STAGE3_BED" \
   --exp_note="3x4090 DDP stage3; LR image -> frozen stage2 scale0 (8x8) posterior mean; teacher=align_weight_5" \
