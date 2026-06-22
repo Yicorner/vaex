@@ -92,8 +92,14 @@ class TwoStageVAETrainer(object):
         alignment_scale_index: int = 0,
         stage2_use_kl: bool = True,
         use_stage2_mid_scale_loss: bool = False,
+        stage2_mid_scale_loss_type: str = 'pixel_l1',
         stage2_mid_scale_indices: Sequence[int] = (1, 2),
         stage2_mid_scale_weights: Sequence[float] = (0.05, 0.05),
+        stage2_mid_scale_dwt_loss_type: str = 'l1',
+        stage2_mid_scale_dwt_ll_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_lh_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_hl_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_hh_weights: Sequence[float] = (1.0,),
         dbg_unused=False,
         dbg_nan=False,
     ):
@@ -155,6 +161,12 @@ class TwoStageVAETrainer(object):
             use_stage2_mid_scale_loss,
             stage2_mid_scale_indices,
             stage2_mid_scale_weights,
+            stage2_mid_scale_loss_type=stage2_mid_scale_loss_type,
+            stage2_mid_scale_dwt_loss_type=stage2_mid_scale_dwt_loss_type,
+            stage2_mid_scale_dwt_ll_weights=stage2_mid_scale_dwt_ll_weights,
+            stage2_mid_scale_dwt_lh_weights=stage2_mid_scale_dwt_lh_weights,
+            stage2_mid_scale_dwt_hl_weights=stage2_mid_scale_dwt_hl_weights,
+            stage2_mid_scale_dwt_hh_weights=stage2_mid_scale_dwt_hh_weights,
         )
 
         self.usage_max = 0.0
@@ -355,11 +367,70 @@ class TwoStageVAETrainer(object):
             return value.strip().lower() not in {'0', 'false', 'no', 'off'}
         return bool(value)
 
+    @staticmethod
+    def _normalize_mid_scale_loss_type(loss_type: str) -> str:
+        key = str(loss_type or 'pixel_l1').strip().lower().replace('-', '_')
+        aliases = {
+            'pixel': 'pixel_l1',
+            'pixel_l1': 'pixel_l1',
+            'l1': 'pixel_l1',
+            'bandlimited_l1': 'pixel_l1',
+            'band_limited_l1': 'pixel_l1',
+            'haar': 'haar_dwt',
+            'dwt': 'haar_dwt',
+            'haar_dwt': 'haar_dwt',
+            'wavelet': 'haar_dwt',
+        }
+        if key not in aliases:
+            raise ValueError(
+                f'Invalid stage2_mid_scale_loss_type={loss_type!r}. '
+                'Expected pixel_l1 or haar_dwt.'
+            )
+        return aliases[key]
+
+    @staticmethod
+    def _normalize_dwt_loss_type(loss_type: str) -> str:
+        key = str(loss_type or 'l1').strip().lower().replace('-', '_')
+        aliases = {
+            'l1': 'l1',
+            'mae': 'l1',
+            'abs': 'l1',
+            'mse': 'mse',
+            'l2': 'mse',
+        }
+        if key not in aliases:
+            raise ValueError(
+                f'Invalid stage2_mid_scale_dwt_loss_type={loss_type!r}. '
+                'Expected l1 or mse.'
+            )
+        return aliases[key]
+
+    @staticmethod
+    def _broadcast_or_validate_weights(
+        values: Sequence[float],
+        count: int,
+        name: str,
+    ) -> Tuple[float, ...]:
+        weights = tuple(float(v) for v in values)
+        if len(weights) == 1:
+            weights = weights * count
+        if len(weights) != count:
+            raise ValueError(f'{name} must have length 1 or {count}, got {weights}')
+        if any(w < 0 for w in weights):
+            raise ValueError(f'{name} must be non-negative, got {weights}')
+        return weights
+
     def configure_stage2_mid_scale_loss(
         self,
         use_stage2_mid_scale_loss,
         stage2_mid_scale_indices: Sequence[int],
         stage2_mid_scale_weights: Sequence[float],
+        stage2_mid_scale_loss_type: str = 'pixel_l1',
+        stage2_mid_scale_dwt_loss_type: str = 'l1',
+        stage2_mid_scale_dwt_ll_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_lh_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_hl_weights: Sequence[float] = (1.0,),
+        stage2_mid_scale_dwt_hh_weights: Sequence[float] = (1.0,),
     ) -> None:
         self.stage2_mid_scale_indices = tuple(int(i) for i in stage2_mid_scale_indices)
         self.stage2_mid_scale_weights = tuple(float(w) for w in stage2_mid_scale_weights)
@@ -368,9 +439,24 @@ class TwoStageVAETrainer(object):
                 'stage2_mid_scale_indices and stage2_mid_scale_weights must have the same length: '
                 f'{self.stage2_mid_scale_indices=} vs {self.stage2_mid_scale_weights=}'
             )
+        if any(w < 0 for w in self.stage2_mid_scale_weights):
+            raise ValueError(f'stage2_mid_scale_weights must be non-negative, got {self.stage2_mid_scale_weights}')
+        self.stage2_mid_scale_loss_type = self._normalize_mid_scale_loss_type(stage2_mid_scale_loss_type)
+        self.stage2_mid_scale_dwt_loss_type = self._normalize_dwt_loss_type(stage2_mid_scale_dwt_loss_type)
+        scale_count = len(self.stage2_mid_scale_indices)
+        self.stage2_mid_scale_dwt_band_weights = {
+            'll': self._broadcast_or_validate_weights(stage2_mid_scale_dwt_ll_weights, scale_count, 'stage2_mid_scale_dwt_ll_weights'),
+            'lh': self._broadcast_or_validate_weights(stage2_mid_scale_dwt_lh_weights, scale_count, 'stage2_mid_scale_dwt_lh_weights'),
+            'hl': self._broadcast_or_validate_weights(stage2_mid_scale_dwt_hl_weights, scale_count, 'stage2_mid_scale_dwt_hl_weights'),
+            'hh': self._broadcast_or_validate_weights(stage2_mid_scale_dwt_hh_weights, scale_count, 'stage2_mid_scale_dwt_hh_weights'),
+        }
         self.use_stage2_mid_scale_loss = (
             self._normalize_bool(use_stage2_mid_scale_loss)
             and sum(self.stage2_mid_scale_weights) > 0
+            and (
+                self.stage2_mid_scale_loss_type == 'pixel_l1'
+                or any(sum(weights) > 0 for weights in self.stage2_mid_scale_dwt_band_weights.values())
+            )
         )
 
     @staticmethod
@@ -457,16 +543,55 @@ class TwoStageVAETrainer(object):
         down = F.interpolate(inp_hr, size=(size, size), mode='area')
         return F.interpolate(down, size=(h, w), mode='bicubic', align_corners=False)
 
+    @staticmethod
+    def _haar_dwt_subbands(x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Single-level orthonormal Haar DWT with zero padding for odd sizes."""
+        h, w = x.shape[-2:]
+        pad_h = h % 2
+        pad_w = w % 2
+        if pad_h or pad_w:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0.0)
+
+        x00 = x[..., 0::2, 0::2]
+        x01 = x[..., 0::2, 1::2]
+        x10 = x[..., 1::2, 0::2]
+        x11 = x[..., 1::2, 1::2]
+        half = 0.5
+        return {
+            'll': (x00 + x01 + x10 + x11) * half,
+            'lh': (-x00 + x01 - x10 + x11) * half,
+            'hl': (-x00 - x01 + x10 + x11) * half,
+            'hh': (x00 - x01 - x10 + x11) * half,
+        }
+
+    def _dwt_band_loss(self, pred: torch.Tensor, target: torch.Tensor) -> Dict[str, torch.Tensor]:
+        pred_bands = self._haar_dwt_subbands(pred)
+        target_bands = self._haar_dwt_subbands(target)
+        losses: Dict[str, torch.Tensor] = {}
+        for band in ('ll', 'lh', 'hl', 'hh'):
+            if self.stage2_mid_scale_dwt_loss_type == 'mse':
+                losses[band] = F.mse_loss(pred_bands[band], target_bands[band])
+            else:
+                losses[band] = F.l1_loss(pred_bands[band], target_bands[band])
+        return losses
+
     def _compute_mid_scale_loss(
         self,
         inp_hr: torch.Tensor,
         mid_scale_recs: Dict[int, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[int, torch.Tensor]]:
-        """Return weighted total and per-scale-index unweighted L1 losses."""
+    ) -> Tuple[torch.Tensor, Dict[int, Dict[str, torch.Tensor]]]:
+        """Return weighted total and per-scale-index unweighted component losses."""
         patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
         max_patch_num = patch_nums[-1]
         loss = inp_hr.new_zeros(())
-        per_scale: Dict[int, torch.Tensor] = {}
+        per_scale: Dict[int, Dict[str, torch.Tensor]] = {}
+        band_weights_by_si = {
+            si: {
+                band: self.stage2_mid_scale_dwt_band_weights[band][pos]
+                for band in ('ll', 'lh', 'hl', 'hh')
+            }
+            for pos, si in enumerate(self.stage2_mid_scale_indices)
+        }
         for si, weight in zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights):
             if weight <= 0:
                 continue
@@ -475,9 +600,18 @@ class TwoStageVAETrainer(object):
             if si not in mid_scale_recs:
                 raise KeyError(f'missing cumulative reconstruction for scale index {si}')
             target = self._bandlimited_hr_target(inp_hr, patch_nums[si], max_patch_num).detach()
-            l1 = F.l1_loss(mid_scale_recs[si], target)
-            per_scale[si] = l1
-            loss = loss + weight * l1
+            if self.stage2_mid_scale_loss_type == 'haar_dwt':
+                band_losses = self._dwt_band_loss(mid_scale_recs[si], target)
+                band_weights = band_weights_by_si[si]
+                scale_loss = inp_hr.new_zeros(())
+                for band, band_loss in band_losses.items():
+                    scale_loss = scale_loss + band_weights[band] * band_loss
+                per_scale[si] = dict(band_losses)
+                per_scale[si]['total'] = scale_loss
+            else:
+                scale_loss = F.l1_loss(mid_scale_recs[si], target)
+                per_scale[si] = {'total': scale_loss}
+            loss = loss + weight * scale_loss
         return loss, per_scale
 
     def _forward_hr_vae_stage2(
@@ -775,7 +909,7 @@ class TwoStageVAETrainer(object):
                     align_weight_mult = 0.0
 
                 effective_align_weight = self.alignment_loss_weight * align_weight_mult
-                mid_scale_per_si: Dict[int, torch.Tensor] = {}
+                mid_scale_per_si: Dict[int, Dict[str, torch.Tensor]] = {}
                 if self.use_stage2_mid_scale_loss and mid_scale_recs is not None:
                     L_mid, mid_scale_per_si = self._compute_mid_scale_loss(inp_hr, mid_scale_recs)
                 else:
@@ -843,10 +977,15 @@ class TwoStageVAETrainer(object):
             if self.use_stage2_mid_scale_loss and mid_scale_per_si:
                 patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
                 weight_by_si = dict(zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights))
-                for si, l1 in mid_scale_per_si.items():
+                for si, components in mid_scale_per_si.items():
                     pn = patch_nums[si]
-                    log_kw[f'L_mid_pn{pn}'] = l1.item()
-                    log_kw[f'L_midw_pn{pn}'] = (weight_by_si[si] * l1).item()
+                    scale_loss = components['total']
+                    log_kw[f'L_mid_pn{pn}'] = scale_loss.item()
+                    log_kw[f'L_midw_pn{pn}'] = (weight_by_si[si] * scale_loss).item()
+                    if self.stage2_mid_scale_loss_type == 'haar_dwt':
+                        for band in ('ll', 'lh', 'hl', 'hh'):
+                            if band in components:
+                                log_kw[f'L_mid_{band}_pn{pn}'] = components[band].item()
             metric_lg.update(**log_kw)
             should_save_vis = (
                 args.save_reconstruction_images
@@ -1050,8 +1189,14 @@ class TwoStageVAETrainer(object):
             'alignment_scale_index': self.alignment_scale_index,
             'stage2_use_kl': self.stage2_use_kl,
             'use_stage2_mid_scale_loss': self.use_stage2_mid_scale_loss,
+            'stage2_mid_scale_loss_type': self.stage2_mid_scale_loss_type,
             'stage2_mid_scale_indices': self.stage2_mid_scale_indices,
             'stage2_mid_scale_weights': self.stage2_mid_scale_weights,
+            'stage2_mid_scale_dwt_loss_type': self.stage2_mid_scale_dwt_loss_type,
+            'stage2_mid_scale_dwt_ll_weights': self.stage2_mid_scale_dwt_band_weights['ll'],
+            'stage2_mid_scale_dwt_lh_weights': self.stage2_mid_scale_dwt_band_weights['lh'],
+            'stage2_mid_scale_dwt_hl_weights': self.stage2_mid_scale_dwt_band_weights['hl'],
+            'stage2_mid_scale_dwt_hh_weights': self.stage2_mid_scale_dwt_band_weights['hh'],
         }
         if self.using_ema:
             state['vae_ema'] = self.vae_ema.state_dict()
@@ -1078,6 +1223,12 @@ class TwoStageVAETrainer(object):
             state.get('use_stage2_mid_scale_loss', self.use_stage2_mid_scale_loss),
             state.get('stage2_mid_scale_indices', self.stage2_mid_scale_indices),
             state.get('stage2_mid_scale_weights', self.stage2_mid_scale_weights),
+            stage2_mid_scale_loss_type=state.get('stage2_mid_scale_loss_type', self.stage2_mid_scale_loss_type),
+            stage2_mid_scale_dwt_loss_type=state.get('stage2_mid_scale_dwt_loss_type', self.stage2_mid_scale_dwt_loss_type),
+            stage2_mid_scale_dwt_ll_weights=state.get('stage2_mid_scale_dwt_ll_weights', self.stage2_mid_scale_dwt_band_weights['ll']),
+            stage2_mid_scale_dwt_lh_weights=state.get('stage2_mid_scale_dwt_lh_weights', self.stage2_mid_scale_dwt_band_weights['lh']),
+            stage2_mid_scale_dwt_hl_weights=state.get('stage2_mid_scale_dwt_hl_weights', self.stage2_mid_scale_dwt_band_weights['hl']),
+            stage2_mid_scale_dwt_hh_weights=state.get('stage2_mid_scale_dwt_hh_weights', self.stage2_mid_scale_dwt_band_weights['hh']),
         )
         if self.using_ema:
             misc.try_load_state_dict('vae_ema', self.vae_ema, state.get('vae_ema'), strict=strict)
@@ -1107,8 +1258,18 @@ class TwoStageVAETrainer(object):
                 print(f'[Stage 2] Training HR VAE without auxiliary alignment (stage2_use_kl={self.stage2_use_kl})')
             if self.use_stage2_mid_scale_loss:
                 patch_nums = tuple(self.vae_wo_ddp.quantize.v_patch_nums)
-                pairs = [
-                    f'pn={patch_nums[si]} w={w}'
-                    for si, w in zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights)
-                ]
-                print(f'[Stage 2] Mid-scale band-limited supervision: {", ".join(pairs)}')
+                pairs = []
+                for pos, (si, w) in enumerate(zip(self.stage2_mid_scale_indices, self.stage2_mid_scale_weights)):
+                    desc = f'pn={patch_nums[si]} w={w}'
+                    if self.stage2_mid_scale_loss_type == 'haar_dwt':
+                        bw = self.stage2_mid_scale_dwt_band_weights
+                        desc += (
+                            f' bands(ll/lh/hl/hh)='
+                            f'{bw["ll"][pos]}/{bw["lh"][pos]}/{bw["hl"][pos]}/{bw["hh"][pos]}'
+                        )
+                    pairs.append(desc)
+                print(
+                    f'[Stage 2] Mid-scale {self.stage2_mid_scale_loss_type} supervision'
+                    f' ({self.stage2_mid_scale_dwt_loss_type if self.stage2_mid_scale_loss_type == "haar_dwt" else "l1"}): '
+                    f'{", ".join(pairs)}'
+                )

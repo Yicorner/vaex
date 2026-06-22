@@ -76,8 +76,14 @@ class Args(Tap):
     alignment_loss_warmup_ep: float = 0.0  # linearly ramp alignment weight over N epochs; 0 disables warmup
     stage2_use_kl: bool = True       # stage-2 VAE mode; False uses posterior mean and zero KL loss (deterministic AE)
     use_stage2_mid_scale_loss: bool = False  # band-limited L1 on intermediate cumulative scale decodes
+    stage2_mid_scale_loss_type: str = 'pixel_l1'  # 'pixel_l1' (legacy) or 'haar_dwt'
     stage2_mid_scale_indices: tuple = (1, 2)  # patch_nums indices (e.g. 10 and 13 for patch_nums 8 10 13 16)
     stage2_mid_scale_weights: tuple = (0.05, 0.05)  # per-index weights, aligned with stage2_mid_scale_indices
+    stage2_mid_scale_dwt_loss_type: str = 'l1'  # sub-band loss for haar_dwt: 'l1' or 'mse'
+    stage2_mid_scale_dwt_ll_weights: tuple = (1.0,)  # LL weights; one value broadcasts, or align with stage2_mid_scale_indices
+    stage2_mid_scale_dwt_lh_weights: tuple = (1.0,)  # LH high-frequency weights
+    stage2_mid_scale_dwt_hl_weights: tuple = (1.0,)  # HL high-frequency weights
+    stage2_mid_scale_dwt_hh_weights: tuple = (1.0,)  # HH high-frequency weights
     lr_vae_resume: str = ''         # optional stage-2 warm start for legacy latent alignment
     lr_vae_frozen: bool = False     # whether to freeze LR VAE (auto-set in stage 2)
 
@@ -303,6 +309,10 @@ _MULTI_VALUE_ARGS_WITH_EQUALS = {
     '--patch_nums',
     '--stage2_mid_scale_indices',
     '--stage2_mid_scale_weights',
+    '--stage2_mid_scale_dwt_ll_weights',
+    '--stage2_mid_scale_dwt_lh_weights',
+    '--stage2_mid_scale_dwt_hl_weights',
+    '--stage2_mid_scale_dwt_hh_weights',
 }
 
 

@@ -75,17 +75,54 @@ def _cli_has_arg(flag: str) -> bool:
 
 def _reapply_stage2_mid_scale_cli_overrides(trainer: TwoStageVAETrainer, args: arg_util.Args) -> None:
     has_use_override = _cli_has_arg('--use_stage2_mid_scale_loss')
-    has_value_override = (
-        _cli_has_arg('--stage2_mid_scale_indices')
-        or _cli_has_arg('--stage2_mid_scale_weights')
-    )
+    has_indices_override = _cli_has_arg('--stage2_mid_scale_indices')
+    has_weights_override = _cli_has_arg('--stage2_mid_scale_weights')
+    has_loss_type_override = _cli_has_arg('--stage2_mid_scale_loss_type')
+    has_dwt_loss_type_override = _cli_has_arg('--stage2_mid_scale_dwt_loss_type')
+    has_dwt_ll_override = _cli_has_arg('--stage2_mid_scale_dwt_ll_weights')
+    has_dwt_lh_override = _cli_has_arg('--stage2_mid_scale_dwt_lh_weights')
+    has_dwt_hl_override = _cli_has_arg('--stage2_mid_scale_dwt_hl_weights')
+    has_dwt_hh_override = _cli_has_arg('--stage2_mid_scale_dwt_hh_weights')
+    has_value_override = any((
+        has_indices_override,
+        has_weights_override,
+        has_loss_type_override,
+        has_dwt_loss_type_override,
+        has_dwt_ll_override,
+        has_dwt_lh_override,
+        has_dwt_hl_override,
+        has_dwt_hh_override,
+    ))
     if not (has_use_override or has_value_override):
         return
 
     use_mid = args.use_stage2_mid_scale_loss if has_use_override else trainer.use_stage2_mid_scale_loss
-    indices = args.stage2_mid_scale_indices if has_value_override else trainer.stage2_mid_scale_indices
-    weights = args.stage2_mid_scale_weights if has_value_override else trainer.stage2_mid_scale_weights
-    trainer.configure_stage2_mid_scale_loss(use_mid, indices, weights)
+    indices = args.stage2_mid_scale_indices if has_indices_override else trainer.stage2_mid_scale_indices
+    weights = args.stage2_mid_scale_weights if has_weights_override else trainer.stage2_mid_scale_weights
+    loss_type = args.stage2_mid_scale_loss_type if has_loss_type_override else trainer.stage2_mid_scale_loss_type
+    dwt_loss_type = args.stage2_mid_scale_dwt_loss_type if has_dwt_loss_type_override else trainer.stage2_mid_scale_dwt_loss_type
+    dwt_band_weights = getattr(trainer, 'stage2_mid_scale_dwt_band_weights', {})
+    def _kept_or_default_band_weights(band: str) -> tuple:
+        weights = tuple(dwt_band_weights.get(band, (1.0,)))
+        if has_indices_override and len(weights) not in (1, len(indices)):
+            return (1.0,)
+        return weights
+
+    ll_weights = args.stage2_mid_scale_dwt_ll_weights if has_dwt_ll_override else _kept_or_default_band_weights('ll')
+    lh_weights = args.stage2_mid_scale_dwt_lh_weights if has_dwt_lh_override else _kept_or_default_band_weights('lh')
+    hl_weights = args.stage2_mid_scale_dwt_hl_weights if has_dwt_hl_override else _kept_or_default_band_weights('hl')
+    hh_weights = args.stage2_mid_scale_dwt_hh_weights if has_dwt_hh_override else _kept_or_default_band_weights('hh')
+    trainer.configure_stage2_mid_scale_loss(
+        use_mid,
+        indices,
+        weights,
+        stage2_mid_scale_loss_type=loss_type,
+        stage2_mid_scale_dwt_loss_type=dwt_loss_type,
+        stage2_mid_scale_dwt_ll_weights=ll_weights,
+        stage2_mid_scale_dwt_lh_weights=lh_weights,
+        stage2_mid_scale_dwt_hl_weights=hl_weights,
+        stage2_mid_scale_dwt_hh_weights=hh_weights,
+    )
     if dist.is_master():
         patch_nums = tuple(trainer.vae_wo_ddp.quantize.v_patch_nums)
         pairs = [
@@ -95,7 +132,8 @@ def _reapply_stage2_mid_scale_cli_overrides(trainer: TwoStageVAETrainer, args: a
         ]
         print(
             '[resume override] stage2 mid-scale config from CLI: '
-            f'enabled={trainer.use_stage2_mid_scale_loss}; {", ".join(pairs)}',
+            f'enabled={trainer.use_stage2_mid_scale_loss}; '
+            f'type={trainer.stage2_mid_scale_loss_type}; {", ".join(pairs)}',
             flush=True,
         )
 
@@ -111,7 +149,13 @@ def build_two_stage_trainer(args: arg_util.Args):
     args.patch_nums = tuple(int(x) for x in args.patch_nums)
     args.stage2_mid_scale_indices = tuple(int(x) for x in args.stage2_mid_scale_indices)
     args.stage2_mid_scale_weights = tuple(float(x) for x in args.stage2_mid_scale_weights)
+    args.stage2_mid_scale_dwt_ll_weights = tuple(float(x) for x in args.stage2_mid_scale_dwt_ll_weights)
+    args.stage2_mid_scale_dwt_lh_weights = tuple(float(x) for x in args.stage2_mid_scale_dwt_lh_weights)
+    args.stage2_mid_scale_dwt_hl_weights = tuple(float(x) for x in args.stage2_mid_scale_dwt_hl_weights)
+    args.stage2_mid_scale_dwt_hh_weights = tuple(float(x) for x in args.stage2_mid_scale_dwt_hh_weights)
     args.use_stage2_mid_scale_loss = TwoStageVAETrainer._normalize_bool(args.use_stage2_mid_scale_loss)
+    args.stage2_mid_scale_loss_type = TwoStageVAETrainer._normalize_mid_scale_loss_type(args.stage2_mid_scale_loss_type)
+    args.stage2_mid_scale_dwt_loss_type = TwoStageVAETrainer._normalize_dwt_loss_type(args.stage2_mid_scale_dwt_loss_type)
     args.img_channels = int(args.img_channels)
     if args.img_channels not in (1, 3):
         raise ValueError(f'img_channels must be 1 or 3, got {args.img_channels}')
@@ -199,11 +243,42 @@ def build_two_stage_trainer(args: arg_util.Args):
             print('[alignment] scale0_image decodes HR scale[0] and compares it to resized LR pixels; stage1 LR latent is not required.')
         if args.use_stage2_mid_scale_loss:
             patch_nums = tuple(vae_wo_ddp.quantize.v_patch_nums)
-            pairs = [
-                f'idx={si} pn={patch_nums[si]} w={w}'
-                for si, w in zip(args.stage2_mid_scale_indices, args.stage2_mid_scale_weights)
-            ]
-            print(f'[stage2 mid-scale loss] band-limited cumulative L1: {", ".join(pairs)}')
+            band_weights = {
+                'll': TwoStageVAETrainer._broadcast_or_validate_weights(
+                    args.stage2_mid_scale_dwt_ll_weights,
+                    len(args.stage2_mid_scale_indices),
+                    'stage2_mid_scale_dwt_ll_weights',
+                ),
+                'lh': TwoStageVAETrainer._broadcast_or_validate_weights(
+                    args.stage2_mid_scale_dwt_lh_weights,
+                    len(args.stage2_mid_scale_indices),
+                    'stage2_mid_scale_dwt_lh_weights',
+                ),
+                'hl': TwoStageVAETrainer._broadcast_or_validate_weights(
+                    args.stage2_mid_scale_dwt_hl_weights,
+                    len(args.stage2_mid_scale_indices),
+                    'stage2_mid_scale_dwt_hl_weights',
+                ),
+                'hh': TwoStageVAETrainer._broadcast_or_validate_weights(
+                    args.stage2_mid_scale_dwt_hh_weights,
+                    len(args.stage2_mid_scale_indices),
+                    'stage2_mid_scale_dwt_hh_weights',
+                ),
+            }
+            pairs = []
+            for pos, (si, w) in enumerate(zip(args.stage2_mid_scale_indices, args.stage2_mid_scale_weights)):
+                desc = f'idx={si} pn={patch_nums[si]} w={w}'
+                if args.stage2_mid_scale_loss_type == 'haar_dwt':
+                    desc += (
+                        f' bands(ll/lh/hl/hh)='
+                        f'{band_weights["ll"][pos]}/{band_weights["lh"][pos]}/'
+                        f'{band_weights["hl"][pos]}/{band_weights["hh"][pos]}'
+                    )
+                pairs.append(desc)
+            print(
+                f'[stage2 mid-scale loss] type={args.stage2_mid_scale_loss_type}, '
+                f'dwt_loss={args.stage2_mid_scale_dwt_loss_type}; {", ".join(pairs)}'
+            )
 
     optimizers: List[AmpOptimizer] = []
     optimizer_specs = [
@@ -298,8 +373,14 @@ def build_two_stage_trainer(args: arg_util.Args):
         alignment_scale_index=0,
         stage2_use_kl=args.stage2_use_kl,
         use_stage2_mid_scale_loss=args.use_stage2_mid_scale_loss,
+        stage2_mid_scale_loss_type=args.stage2_mid_scale_loss_type,
         stage2_mid_scale_indices=args.stage2_mid_scale_indices,
         stage2_mid_scale_weights=args.stage2_mid_scale_weights,
+        stage2_mid_scale_dwt_loss_type=args.stage2_mid_scale_dwt_loss_type,
+        stage2_mid_scale_dwt_ll_weights=args.stage2_mid_scale_dwt_ll_weights,
+        stage2_mid_scale_dwt_lh_weights=args.stage2_mid_scale_dwt_lh_weights,
+        stage2_mid_scale_dwt_hl_weights=args.stage2_mid_scale_dwt_hl_weights,
+        stage2_mid_scale_dwt_hh_weights=args.stage2_mid_scale_dwt_hh_weights,
         dbg_unused=args.dbg_unused,
         dbg_nan=args.dbg_nan,
     )
@@ -366,6 +447,9 @@ def train_one_ep(ep: int, is_first_ep: bool, start_it: int, args: arg_util.Args,
             pn = patch_nums[si]
             me.add_meter(f'L_mid_pn{pn}', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
             me.add_meter(f'L_midw_pn{pn}', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
+            if trainer.stage2_mid_scale_loss_type == 'haar_dwt':
+                for band in ('ll', 'lh', 'hl', 'hh'):
+                    me.add_meter(f'L_mid_{band}_pn{pn}', misc.SmoothedValue(fmt='{median:.3f} ({global_avg:.3f})'))
     header = f'[Ep]: [{ep:4d}/{args.ep}]'
 
     if is_first_ep:
@@ -512,6 +596,7 @@ def main_training():
             wei_g=wei_g,
             L_align=stats.get('L_align', 0.0),
             W_align=stats.get('W_align', 0.0),
+            L_mid=stats.get('L_mid', 0.0),
         )
         tb_lg.update(head='PT_z_burnout', step=ep + 1, rest_hours=round(sec / 60 / 60, 2))
 

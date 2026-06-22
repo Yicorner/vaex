@@ -40,6 +40,10 @@ DATA_PATH/
 | `alignment_loss_warmup_ep=0.0` | 对齐损失线性 warmup epoch 数，0 表示不启用 |
 | `stage2_use_kl=True` | 兼容旧路径：stage2 训练时采样 latent，并加入 HR 多尺度 KL |
 | `stage2_use_kl=False` | 新 AE 路径：stage2 训练时也使用 posterior mean，`Lkl=0`，不做采样 |
+| `use_stage2_mid_scale_loss=True` | 启用 stage2 中间累计尺度监督 |
+| `stage2_mid_scale_loss_type=pixel_l1` | 默认旧行为：中间尺度 decode 与 band-limited HR target 做 L1 |
+| `stage2_mid_scale_loss_type=haar_dwt` | 新行为：先做一级 Haar DWT，再按 `LL/LH/HL/HH` 子带加权监督 |
+| `stage2_mid_scale_dwt_*_weights` | DWT 子带权重；长度为 1 时广播到所有中间尺度，或与 `stage2_mid_scale_indices` 对齐 |
 | `l1/l2/lp/ld` | 主重建、LPIPS、GAN loss 权重；`lp` 在 trainer 内会再乘 2 |
 
 ### 2.1 Stage 1
@@ -59,13 +63,51 @@ L_total = L1_rec * wei_l1 + LPIPS * wei_lpips + KL * lr_vq_beta + L_adv * wei_di
 损失形式：
 
 ```text
-L_total = L_hr_rec + stage2_kl_term + L_adv * wei_disc + L_scale0_img * alignment_loss_weight
+L_total = L_hr_rec + stage2_kl_term + L_adv * wei_disc + L_scale0_img * alignment_loss_weight + L_mid_scale
 L_hr_rec = l1 * L1(rec, HR) + l2 * MSE(rec, HR) + (2 * lp) * LPIPS(rec, HR)
 L_scale0_img = L1(DecodeStage2Scale0(HR_scale0_mean), Resize(LR_image, decoded_scale0_size))
 stage2_kl_term = KL when stage2_use_kl=True, otherwise 0
 ```
 
 当目标是最高重建准确性而不需要 latent 多样性时，推荐实验开关为 `stage2_use_kl=False`。这时 stage2 更像一个 deterministic multi-scale autoencoder：训练和推理都走 posterior mean，`mean_logvar_conv` 的 logvar 分支仍保留在结构里用于 checkpoint 兼容，但不会贡献 KL loss 或采样噪声。
+
+---
+
+## 2.3 Stage2 中间尺度 Haar DWT 监督
+
+`use_stage2_mid_scale_loss=True` 会让 HR VAE 的同一次 forward 返回指定 scale 的累计 decode 图像，不会额外跑第二次 encoder。每个 scale 的 target 仍然由 HR 图像先按 `patch_nums[si] / patch_nums[-1]` 做 band-limited 下采样，再上采样回原图大小。
+
+默认 `stage2_mid_scale_loss_type=pixel_l1` 保持旧行为：
+
+```text
+L_mid(si) = L1(mid_scale_rec[si], bandlimited_hr_target[si])
+```
+
+`stage2_mid_scale_loss_type=haar_dwt` 时，先对 prediction 和 target 做一级 Haar DWT，再对四个子带做加权 loss：
+
+```text
+LL = low-frequency approximation
+LH / HL / HH = high-frequency details
+L_mid(si) = w_ll[si] * loss(LL_pred, LL_tgt)
+          + w_lh[si] * loss(LH_pred, LH_tgt)
+          + w_hl[si] * loss(HL_pred, HL_tgt)
+          + w_hh[si] * loss(HH_pred, HH_tgt)
+L_mid_scale = sum_i stage2_mid_scale_weights[i] * L_mid(si)
+```
+
+Diffusion-4K 的训练脚本使用 `pytorch_wavelets.DWTForward(J=1, mode='zero', wave='haar')`，将 `xll/xlh/xhl/xhh` 沿 channel 拼接后计算 flow-matching MSE。`myvaex` 中为了不新增依赖，trainer 内部直接用等价的 2x2 Haar 切片公式实现。`stage2_mid_scale_dwt_loss_type` 默认为 `l1`，也支持 `mse` 来更贴近 Diffusion-4K 的形式。
+
+推荐实验思路：低尺度更多约束 `LL`，高尺度逐步提高 `LH/HL/HH`。例如对 `stage2_mid_scale_indices 1 2`：
+
+```bash
+--stage2_mid_scale_loss_type=haar_dwt
+--stage2_mid_scale_dwt_ll_weights 1.0 0.25
+--stage2_mid_scale_dwt_lh_weights 0.15 1.0
+--stage2_mid_scale_dwt_hl_weights 0.15 1.0
+--stage2_mid_scale_dwt_hh_weights 0.05 0.75
+```
+
+日志中 `L_mid_pn*` 表示该尺度子带加权后的未乘 `stage2_mid_scale_weights` loss，`L_midw_pn*` 表示乘上尺度权重后的贡献；DWT 模式会额外打印 `L_mid_ll_pn*`、`L_mid_lh_pn*`、`L_mid_hl_pn*`、`L_mid_hh_pn*`。
 
 ---
 
